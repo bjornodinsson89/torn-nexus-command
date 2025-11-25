@@ -1,104 +1,179 @@
 /**
  * CODENAME: WAR_LIEUTENANT
- * RANK: ⭐️ (Junior Officer)
- * MISSION: Reconnaissance & Traffic Control
+ * RANK: Tactical Intelligence Officer (v2)
+ * MISSION: Smart Recon, Adaptive Polling, Hybrid API Targeting
+ * NOTES:
+ *   - Never fetches directly
+ *   - Never touches the API key
+ *   - Only requests through WAR_GENERAL.intel.request()
+ *   - Determines WHEN and WHAT intel is needed
+ *   - Emits tactical signals
  */
 
 (function() {
 
     const Lieutenant = {
-        name: "Lieutenant (API)",
+        name: "Lieutenant v2",
         general: null,
-        patrolTimer: null,
-        currentInterval: 30000, 
-        requirements: "basic,chain,timestamp",
-        
-        // --- ADDED: API KEY STORAGE ---
-        apiKey: null, 
 
-        init: function(General) {
+        // Tactical state
+        polling: null,
+        mode: "peace", // peace | chain | panic
+        lastIntelTs: 0,
+
+        // Timing presets (ms)
+        intervals: {
+            peace:  15000,
+            chain:  5000,
+            panic:  1500
+        },
+
+        // For recovery logic
+        consecutiveFails: 0,
+        failThreshold: 3,
+
+        init(General) {
             this.general = General;
-            
-            // Try to load API key (You can change this logic later)
-            this.apiKey = localStorage.getItem('WAR_API_KEY');
+            console.log("👁 [LIEUTENANT v2] Tactical Recon online.");
 
-            General.signals.listen('SITREP_UPDATE', (sitrep) => {
-                this.adjustTactics(sitrep);
+            // Watch for SITREPs from Colonel to adjust tactics
+            General.signals.listen("SITREP_UPDATE", (sitrep) => {
+                this.updateTacticalMode(sitrep);
             });
-            
-            console.log(`👁 [LIEUTENANT] Starting patrol loop...`);
-            this.performRecon();
-        },
 
-        // --- ADDED: MISSING FUNCTION ---
-        hasCredentials: function() {
-            // Returns true if we have a key, false if not
-            return this.apiKey && this.apiKey.length > 0;
-        },
+            // Watch API faults
+            General.signals.listen("API_ERROR",    () => this.handleApiFault());
+            General.signals.listen("API_TIMEOUT",  () => this.handleApiFault());
+            General.signals.listen("API_NETWORK_ERROR", () => this.handleApiFault());
+            General.signals.listen("API_RATE_LIMIT",   () => this.handleApiFault());
 
-        // --- ADDED: MISSING FUNCTION ---
-        request: function(selection) {
-            return new Promise((resolve, reject) => {
-                if (!this.hasCredentials()) {
-                    reject("No API Key");
-                    return;
-                }
-
-                // REAL API CALL
-                const url = `https://api.torn.com/user/?selections=${selection}&key=${this.apiKey}`;
-                
-                // We use the General's window context or GM_xmlhttpRequest if available
-                // For now, using standard fetch for simplicity
-                fetch(url)
-                    .then(res => res.json())
-                    .then(data => {
-                        if (data.error) reject(data.error.error);
-                        else resolve(data);
-                    })
-                    .catch(err => reject(err));
+            // Watch successful API
+            General.signals.listen("RAW_INTEL", () => {
+                this.consecutiveFails = 0;
             });
+
+            // Ensure API key state is confirmed
+            General.signals.listen("API_KEY_UPDATED", () => {
+                this.startPatrol();
+            });
+
+            // Begin if key already exists
+            if (General.intel.hasCredentials()) {
+                this.startPatrol();
+            } else {
+                console.warn("👁 [LIEUTENANT v2] No API key, patrol on standby.");
+            }
         },
 
-        performRecon: function() {
-            // Now this function exists, so it won't crash!
+        // ---------------------------
+        // PATROL ENGINE
+        // ---------------------------
+        startPatrol() {
+            if (this.polling) clearTimeout(this.polling);
+            console.log("👁 [LIEUTENANT v2] Patrol started.");
+            this.scheduleNext();
+        },
+
+        scheduleNext() {
+            if (this.polling) clearTimeout(this.polling);
+            const delay = this.intervals[this.mode] || this.intervals.peace;
+
+            this.polling = setTimeout(() => {
+                this.performRecon();
+            }, delay);
+        },
+
+        // ---------------------------
+        // RECON LOGIC
+        // ---------------------------
+        performRecon() {
             if (!this.general.intel.hasCredentials()) {
-                console.log("👁 [LIEUTENANT] No Credentials found. Pausing.");
-                this.scheduleNext(10000); // Check again in 10s
+                console.warn("👁 [LIEUTENANT v2] No credentials. Pausing recon.");
+                this.scheduleNext();
                 return;
             }
 
-            this.general.intel.request(this.requirements)
+            const now = Date.now();
+            const sinceLast = now - this.lastIntelTs;
+
+            // Skip if last intel too recent
+            // (General caching already helps but this reduces load further)
+            if (sinceLast < 500) {
+                this.scheduleNext();
+                return;
+            }
+
+            this.lastIntelTs = now;
+
+            // Request unified intel block from General (v1 auto)
+            const requestMeta = {
+                version: "auto",
+                endpoint: "user",
+                selections: ["basic", "chain", "faction", "bars", "profile", "timestamp"],
+                normalize: true
+            };
+
+            this.general.signals.dispatch("INTEL_REQUESTED", { mode: this.mode });
+
+            this.general.intel.request(requestMeta)
                 .then(data => {
-                    this.general.signals.dispatch('RAW_INTEL', data);
+                    this.general.signals.dispatch("RAW_INTEL", data);
                 })
                 .catch(err => {
-                    console.warn(`👁 [LIEUTENANT] Recon failed: ${err}`);
+                    console.warn("👁 [LIEUTENANT v2] Recon error:", err);
                 })
                 .finally(() => {
-                    this.scheduleNext(this.currentInterval);
+                    this.scheduleNext();
                 });
         },
 
-        scheduleNext: function(ms) {
-            if (this.patrolTimer) clearTimeout(this.patrolTimer);
-            this.patrolTimer = setTimeout(() => this.performRecon(), ms);
+        // ---------------------------
+        // MODE ADJUSTMENT (BASED ON COLONEL)
+        // ---------------------------
+        updateTacticalMode(sitrep) {
+            if (!sitrep || !sitrep.chain) {
+                this.changeMode("peace");
+                return;
+            }
+
+            const timeout = sitrep.chain.timeout ?? 0;
+            const active = sitrep.chain.current > 0;
+
+            if (!active) {
+                this.changeMode("peace");
+            } 
+            else if (timeout < 60) {
+                this.changeMode("panic");
+            } 
+            else {
+                this.changeMode("chain");
+            }
         },
 
-        adjustTactics: function(sitrep) {
-            let targetInterval = 30000; 
+        changeMode(newMode) {
+            if (newMode === this.mode) return;
+            this.mode = newMode;
+            console.log(`👁 [LIEUTENANT v2] Tactical mode now: ${newMode.toUpperCase()}`);
+            this.general.signals.dispatch("TACTIC_SHIFT", { mode: newMode });
+            this.scheduleNext();
+        },
 
-            if (sitrep.isPanic) {
-                targetInterval = 2000; 
-            } else if (sitrep.chainActive) {
-                targetInterval = 5000; 
-            }
-
-            if (targetInterval !== this.currentInterval) {
-                this.currentInterval = targetInterval;
+        // ---------------------------
+        // FAULT RECOVERY
+        // ---------------------------
+        handleApiFault() {
+            this.consecutiveFails++;
+            if (this.consecutiveFails >= this.failThreshold) {
+                console.warn("👁 [LIEUTENANT v2] Too many API failures — entering safe mode.");
+                this.changeMode("peace");
+                this.consecutiveFails = 0;
             }
         }
+
     };
 
-    if (window.WAR_GENERAL) window.WAR_GENERAL.register("Lieutenant", Lieutenant);
+    if (window.WAR_GENERAL) {
+        window.WAR_GENERAL.register("Lieutenant", Lieutenant);
+    }
 
 })();
