@@ -15,12 +15,10 @@
             this.general = General;
             this.buildInterface();
 
-            // Listen for Logic Updates
             General.signals.listen('SITREP_UPDATE', (sitrep) => {
                 this.updateDashboard(sitrep);
             });
             
-            // Listen for Key Acceptance
             General.signals.listen('CLEARANCE_GRANTED', () => {
                 this.flashStatus("green");
                 const inp = this.shadow.getElementById('api-input');
@@ -28,12 +26,11 @@
             });
 
             this.initSliders();
-            this.initApiInput(); // <--- NEW FUNCTION
+            this.initApiInput();
             
             console.log(`🎨 [MAJOR] GUI online.`);
         },
 
-        // --- BUILDING THE UI ---
         buildInterface: function() {
             const host = document.createElement("fwh-root");
             document.body.appendChild(host);
@@ -83,7 +80,6 @@
             };
         },
 
-        // --- API KEY LOGIC ---
         initApiInput: function() {
             const btn = this.shadow.getElementById('api-save-btn');
             const input = this.shadow.getElementById('api-input');
@@ -91,7 +87,6 @@
             btn.onclick = () => {
                 const key = input.value.trim();
                 if(key.length > 10) {
-                    // Send to General for encryption
                     this.general.intel.setCredentials(key);
                 } else {
                     alert("Invalid Key");
@@ -105,7 +100,6 @@
             setTimeout(() => dot.style.background = 'grey', 500);
         },
 
-        // --- SLIDER LOGIC ---
         renderSlider: function(key, label, colorClass) {
             const savedVal = localStorage.getItem("WAR_CFG_" + key) || (key === 'panic' ? 60 : 120);
             const maxSeconds = 300; 
@@ -216,8 +210,6 @@
                 .val-display { color: #fff; font-weight: bold; }
                 .fwh-toggle-btn { position: absolute; right: -45px; top: 10px; width: 45px; height: 45px; background: #1a1a1a; border-radius: 0 8px 8px 0; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid #333; border-left: none; font-size: 20px; }
                 .fwh-toggle-btn:hover { background: #222; }
-                
-                /* API INPUT STYLES */
                 .fwh-input { flex: 1; background: #222; border: 1px solid #444; color: #fff; padding: 6px; border-radius: 4px; outline: none; }
                 .fwh-input:focus { border-color: var(--accent); }
                 .fwh-btn { background: #333; border: 1px solid #444; color: #fff; padding: 6px 12px; border-radius: 4px; cursor: pointer; }
