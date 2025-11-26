@@ -1,207 +1,200 @@
 /**
- * CODENAME: WAR_SERGEANT
- * RANK: 🎖 (NCO)
- * MISSION: External Comms & Firebase Sync
- * BASE: War Room Database Uplink v2
+ * CODENAME: WAR_SERGEANT v2.1
+ * ROLE: Communications Officer
+ * RESPONSIBILITY:
+ *   - Firebase ↔ War Room sync
+ *   - Faction members
+ *   - Shared faction targets
+ *   - Watcher flags
+ *   - Live timestamps (lastSeen)
+ *   - Enforce faction isolation
  */
 
-(function() {
-    "use strict";
-
-    const FB_CONFIG = {
-        apiKey: "AIzaSyAXIP665pJj4g9L9i-G-XVBrcJ0eU5V4uw",
-        authDomain: "torn-war-room.firebaseapp.com",
-        databaseURL: "https://torn-war-room-default-rtdb.firebaseio.com",
-        projectId: "torn-war-room",
-        storageBucket: "torn-war-room.firebasestorage.app",
-        messagingSenderId: "559747349324",
-        appId: "1:559747349324:web:ec1c7d119e5fd50443ade9"
-    };
+(function () {
 
     const Sergeant = {
         general: null,
         db: null,
-        auth: null,
+        factionId: null,
         uid: null,
-        fid: null,
+
         membersRef: null,
-        membersCb: null,
         targetsRef: null,
-        targetsCb: null,
 
-        init(G) {
-            this.general = G;
-            this.loadFirebase()
-                .then(() => this.initFirebase())
-                .then(() => this.initAuth())
-                .then(() => this.bindSignals());
-        },
+        /* ------------------------------ Init ------------------------------ */
+        init(General) {
+            this.general = General;
 
-        loadFirebase() {
-            return new Promise((resolve, reject) => {
-                const s1 = document.createElement("script");
-                s1.src = "https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js";
-                s1.onload = () => {
-                    const s2 = document.createElement("script");
-                    s2.src = "https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js";
-                    s2.onload = () => {
-                        const s3 = document.createElement("script");
-                        s3.src = "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js";
-                        s3.onload = resolve;
-                        s3.onerror = reject;
-                        document.head.appendChild(s3);
-                    };
-                    s2.onerror = reject;
-                    document.head.appendChild(s2);
-                };
-                s1.onerror = reject;
-                document.head.appendChild(s1);
-            });
-        },
-
-        initFirebase() {
-            if (!firebase.apps.length) firebase.initializeApp(FB_CONFIG);
-            this.db = firebase.database();
-            this.auth = firebase.auth();
-        },
-
-        initAuth() {
-            return new Promise(resolve => {
-                this.auth.onAuthStateChanged(user => {
-                    if (user) {
-                        this.uid = user.uid;
-                        resolve();
-                    } else {
-                        this.auth.signInAnonymously();
-                    }
-                });
-            });
-        },
-
-        bindSignals() {
-            const S = this;
-            S.general.signals.listen("RAW_INTEL", d => S.handleIntel(d));
-            S.general.signals.listen("REQUEST_SHARE_TARGET", t => S.shareTarget(t));
-            S.general.signals.listen("SET_WATCH_STATUS", v => S.setWatch(v));
-        },
-
-        handleIntel(raw) {
-            const r = raw.raw || raw;
-            const tornId = r.player_id || r.userID;
-            const name = r.name || r.playername || "Unknown";
-            const factionId = r.faction?.faction_id || r.faction_id || null;
-
-            if (!tornId || !this.uid) return;
-
-            const intel = {
-                tornId: String(tornId),
-                name: name,
-                factionId: factionId ? String(factionId) : null
-            };
-            this.syncMembership(intel);
-        },
-
-        async syncMembership(i) {
-            const uid = this.uid;
-            const fid = i.factionId;
-
-            if (!fid) {
-                if (this.fid) {
-                    await this.removeMember(this.fid, uid);
-                    this.detach();
-                }
-                this.fid = null;
+            if (!firebase || !firebase.database) {
+                console.error("[SERGEANT] Firebase SDK missing");
                 return;
             }
 
-            if (this.fid && this.fid !== fid) {
-                await this.removeMember(this.fid, uid);
-                this.detach();
-            }
+            this.db = firebase.database();
 
-            this.fid = fid;
-            await this.saveMember(fid, uid, i.tornId, i.name);
-            this.attach(fid);
-        },
-
-        async saveMember(fid, uid, tornId, name) {
-            const now = Date.now();
-            const ref = this.db.ref(`factions/${fid}/members/${uid}`);
-            const snap = await ref.get();
-            const existing = snap.exists() ? snap.val() : {};
-
-            await ref.set({
-                userID: tornId,
-                name: name,
-                factionID: fid,
-                watching: existing.watching === true,
-                lastSeen: now,
-                updatedAt: now
+            // Detect user + faction from the General signal bus
+            General.signals.listen("RAW_INTEL", intel => {
+                this.trySyncFaction(intel);
             });
         },
 
-        removeMember(fid, uid) {
-            return this.db.ref(`factions/${fid}/members/${uid}`).remove();
+        /* ----------------------- Faction Sync Logic ----------------------- */
+        trySyncFaction(intel) {
+            if (!intel || !intel.user) return;
+
+            const tornID = intel.user.userID;
+            const factionID = intel.user.factionID || null;
+
+            if (this.uid !== tornID) {
+                this.uid = tornID;
+            }
+
+            // If user left faction
+            if (!factionID && this.factionId) {
+                this.detachFactionListeners();
+                this.factionId = null;
+                return;
+            }
+
+            // If first time joining or switching
+            if (factionID && factionID !== this.factionId) {
+                this.detachFactionListeners();
+                this.factionId = factionID;
+                this.attachFactionListeners();
+            }
+
+            // Upsert user's membership entry
+            if (this.factionId) {
+                this.upsertMember(intel.user);
+            }
         },
 
-        setWatch(state) {
-            if (!this.fid || !this.uid) return;
-            this.db.ref(`factions/${this.fid}/members/${this.uid}/watching`).set(state === true);
+        /* ----------------------- Firebase Listeners ----------------------- */
+        attachFactionListeners() {
+            if (!this.factionId) return;
+
+            this.membersRef = this.db.ref(`factions/${this.factionId}/members`);
+            this.targetsRef = this.db.ref(`factions/${this.factionId}/targets`);
+
+            this.membersRef.on("value", snap => this.handleMembersSnapshot(snap));
+            this.targetsRef.on("value", snap => this.handleTargetsSnapshot(snap));
+
+            console.log(`[SERGEANT] Attached listeners for faction ${this.factionId}`);
         },
 
-        async shareTarget(t) {
-            if (!this.fid || !this.uid || !t?.id) return;
-            const tid = String(t.id);
-            const ref = this.db.ref(`factions/${this.fid}/targets/${tid}`);
-            const snap = await ref.get();
-            const now = Date.now();
-
-            const existing = snap.exists() ? snap.val() : {};
-
-            const p = {
-                id: tid,
-                name: t.name || existing.name || "Unknown",
-                level: t.level ?? existing.level ?? null,
-                faction: t.faction ?? existing.faction ?? null,
-                addedBy: existing.addedBy || this.uid,
-                addedAt: existing.addedAt || now,
-                spyIntel: existing.spyIntel || null
-            };
-            await ref.set(p);
-        },
-
-        attach(fid) {
-            this.detach();
-
-            const memRef = this.db.ref(`factions/${fid}/members`);
-            const tarRef = this.db.ref(`factions/${fid}/targets`);
-
-            this.membersCb = snap => {
-                this.general.signals.dispatch("FACTION_MEMBERS_UPDATE", snap.val() || {});
-            };
-            this.targetsCb = snap => {
-                this.general.signals.dispatch("FACTION_TARGETS_UPDATE", snap.val() || {});
-            };
-
-            memRef.on("value", this.membersCb);
-            tarRef.on("value", this.targetsCb);
-
-            this.membersRef = memRef;
-            this.targetsRef = tarRef;
-        },
-
-        detach() {
-            if (this.membersRef && this.membersCb) this.membersRef.off("value", this.membersCb);
-            if (this.targetsRef && this.targetsCb) this.targetsRef.off("value", this.targetsCb);
+        detachFactionListeners() {
+            if (this.membersRef) this.membersRef.off();
+            if (this.targetsRef) this.targetsRef.off();
             this.membersRef = null;
             this.targetsRef = null;
-            this.membersCb = null;
-            this.targetsCb = null;
+        },
+
+        /* ------------------------- Write Members -------------------------- */
+        upsertMember(user) {
+            if (!this.factionId || !this.uid) return;
+
+            const ref = this.db.ref(`factions/${this.factionId}/members/${this.uid}`);
+
+            const payload = {
+                userID: String(this.uid),
+                name: user.name || user.playername || "Unknown",
+                level: user.level || null,
+                role: user.role || "",
+                status: user.status || "Okay",
+                lastSeen: Date.now(),
+                watching: user.watching || false,
+                until: user.until || 0,
+                factionID: this.factionId
+            };
+
+            ref.set(payload).catch(err => {
+                console.error("[SERGEANT] Failed to upsert member:", err);
+            });
+        },
+
+        /* ------------------------- Snapshot: Members ------------------------ */
+        handleMembersSnapshot(snap) {
+            const val = snap.val() || {};
+            const members = {};
+
+            Object.keys(val).forEach(uid => {
+                const m = val[uid];
+                members[uid] = {
+                    userID: String(m.userID || uid),
+                    name: m.name || "Unknown",
+                    level: m.level || null,
+                    role: m.role || "",
+                    status: m.status || "Okay",
+                    until: m.until || 0,
+                    lastSeen: m.lastSeen || 0,
+                    watching: !!m.watching
+                };
+            });
+
+            this.general.signals.dispatch("FACTION_MEMBERS_UPDATE", members);
+        },
+
+        /* ------------------------- Snapshot: Targets ------------------------ */
+        handleTargetsSnapshot(snap) {
+            const val = snap.val() || {};
+            const targets = {};
+
+            Object.keys(val).forEach(tid => {
+                const t = val[tid];
+                targets[tid] = {
+                    id: String(t.id || tid),
+                    name: t.name || "Unknown",
+                    level: t.level || null,
+                    faction: t.faction || "",
+                    status: t.status || "Okay",
+                    timer: t.timer || 0,
+                    score: t.score || 0,
+                    lastSeen: t.lastSeen || 0
+                };
+            });
+
+            this.general.signals.dispatch("FACTION_TARGETS_UPDATE", { targets });
+        },
+
+        /* ------------------------ Add Shared Target ------------------------ */
+        addTarget(t) {
+            if (!this.factionId) return;
+
+            const tid = t.id;
+            const ref = this.db.ref(`factions/${this.factionId}/targets/${tid}`);
+
+            const payload = {
+                id: tid,
+                name: t.name || "Unknown",
+                level: t.level || null,
+                faction: t.faction || "",
+                status: t.status || "Okay",
+                timer: t.timer || 0,
+                score: t.score || 0,
+                lastSeen: t.lastSeen || 0
+            };
+
+            ref.set(payload).catch(err => {
+                console.error("[SERGEANT] Failed to save shared target:", err);
+            });
+        },
+
+        /* ------------------------ Toggle Watcher Flag ------------------------ */
+        toggleWatcher(state) {
+            if (!this.factionId || !this.uid) return;
+
+            this.db
+                .ref(`factions/${this.factionId}/members/${this.uid}/watching`)
+                .set(state)
+                .catch(err => console.error("[SERGEANT] Watch flag update failed:", err));
         }
     };
 
+    /* ---------------------- Register with General ----------------------- */
     if (window.WAR_GENERAL) {
-        window.WAR_GENERAL.register("Sergeant", Sergeant);
+        WAR_GENERAL.register("Sergeant", Sergeant);
+    } else {
+        console.warn("[WAR_SERGEANT] WAR_GENERAL missing – Sergeant not registered.");
     }
 
 })();
