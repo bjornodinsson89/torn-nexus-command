@@ -1,5 +1,9 @@
 /*********************************************
- * WAR_SERGEANT v2.3 
+ * WAR_SERGEANT v2.3 — External Comms Officer
+ * Responsibilities:
+ *   • Sync faction members to internal channels
+ *   • Manage shared target list (local)
+ *   • Relay commander orders (future Firebase integration)
  *********************************************/
 
 (function() {
@@ -29,17 +33,18 @@ class Sergeant {
     }
 
     /**************************************************************
-     * FIXED LISTENER – RAW_INTEL INSTEAD OF FACTION_SITREP
+     * LISTENERS — FIXED
      **************************************************************/
     registerListeners() {
-        // Fix #1: was FACTION_SITREP (never fired)
+        // FIX: Correct event is RAW_INTEL
         this.listen("RAW_INTEL", intel => {
             if (!intel || !intel.faction) return;
+
             this.factionId = intel.faction.faction_id || this.factionId;
             this.syncFactionMembers(intel.faction);
         });
 
-        // Add-shared-target remains unchanged
+        // User requests adding a shared target
         this.listen("REQUEST_ADD_SHARED_TARGET", t => {
             if (!t) return;
             this.addSharedTarget(t);
@@ -49,8 +54,12 @@ class Sergeant {
     listen(evt, fn) {
         const unsub = this.general.signals.listen(evt, fn);
         this.listeners.push(unsub);
+        return unsub;
     }
 
+    /**************************************************************
+     * SHARED TARGETS MANAGEMENT
+     **************************************************************/
     addSharedTarget(t) {
         this.sharedTargets.push(t);
         this.saveShared();
@@ -68,17 +77,27 @@ class Sergeant {
     saveShared() {
         clearTimeout(this._pendingWrite);
         this._pendingWrite = setTimeout(() => {
-            localStorage.setItem("war_shared_targets", JSON.stringify(this.sharedTargets));
+            try {
+                localStorage.setItem("war_shared_targets", JSON.stringify(this.sharedTargets));
+            } catch {}
         }, 300);
     }
 
+    /**************************************************************
+     * FACTION MEMBER SYNC
+     **************************************************************/
     syncFactionMembers(faction) {
         try {
             const members = faction.members || {};
             this.general.signals.dispatch("FACTION_MEMBERS_UPDATE", members);
-        } catch {}
+        } catch (err) {
+            console.error("[Sergeant] Faction sync error:", err);
+        }
     }
 
+    /**************************************************************
+     * CLEANUP
+     **************************************************************/
     cleanup() {
         this.listeners.forEach(u => u());
         this.listeners = [];
@@ -89,7 +108,7 @@ class Sergeant {
 }
 
 /**************************************************************
- * REGISTER
+ * REGISTER WITH GENERAL
  **************************************************************/
 if (window.WAR_GENERAL) {
     window.WAR_GENERAL.register("Sergeant", new Sergeant());
