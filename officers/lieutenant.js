@@ -1,70 +1,121 @@
-(function () {
+/**
+ * WAR_LIEUTENANT v2.2 (Final Deployment Build)
+ * Role: Reconnaissance Officer
+ * Responsibilities:
+ *    • Poll Torn API (via General)
+ *    • Deliver RAW_INTEL
+ *    • Adaptive polling (peace / chain / panic)
+ *    • Re-init safe
+ */
+
+(function() {
 
     const Lieutenant = {
         general: null,
+        intervals: [],
+        listeners: [],
+        memoryKey: "lieutenant_chain_memory_v22",
 
-        init(General) {
-            this.general = General;
-
-            // ingest raw intel (existing)
-            General.signals.listen("RAW_INTEL", intel => this.ingestRawIntel(intel));
-
-            // chain memory as before
-            this.loadMemory();
-
-            
-            setInterval(()=>this.pollIntel(), 1000);
-
-            console.log("%c[Lieutenant v2.1] Online (Polling Active)", "color:#4cf");
+        memory: {
+            active: false,
+            hits: 0,
+            timeLeft: 0,
+            chainID: 0,
+            lastUpdate: 0,
+            paceHistory: []
         },
 
-        pollTicker:0,
+        init(General) {
+            this.cleanup();
+            this.general = General;
 
-        pollIntel() {
-            this.pollTicker++;
-            if (this.pollTicker < this.getPollingGate()) return;
-            this.pollTicker = 0;
+            this.loadMemory();
+            this.registerListeners();
+            this.startPolling();
+
+            console.log("%c[Lieutenant v2.2] Recon Online", "color:#4cf");
+        },
+
+        cleanup() {
+            this.intervals.forEach(id => clearInterval(id));
+            this.intervals = [];
+
+            if (this.listeners.length) {
+                this.listeners.forEach(unsub => { try { unsub(); } catch {} });
+                this.listeners = [];
+            }
+        },
+
+        registerListeners() {
+            const unsub = this.general.signals.listen("RAW_INTEL", intel => {
+                this.ingest(intel);
+            });
+            this.listeners.push(unsub);
+        },
+
+        startPolling() {
+            const id = setInterval(() => {
+                // only poll with valid API key
+                if (!this.general.intel.hasCredentials()) return;
+
+                this.poll();
+            }, 1000);
+
+            this.intervals.push(id);
+        },
+
+        poll() {
+            const wait = this.pollRate();
+            if (!this._tick) this._tick = 0;
+            this._tick++;
+
+            if (this._tick < wait) return;
+            this._tick = 0;
 
             this.general.intel.request({
-                selections:["basic","chain","faction","bars"],
-                normalize:true
-            }).then(data=>{
-                this.general.signals.dispatch("RAW_INTEL", data);
+                normalize: true,
+                selections: ["basic","bars","chain","faction"]
+            }).then(intel => {
+                this.general.signals.dispatch("RAW_INTEL", intel);
             }).catch(()=>{});
         },
 
-        getPollingGate() {
-            // Converts seconds → ticks (1 tick per second)
-            if (this.memory.timeLeft < 60 && this.memory.active) return 1;   // panic 1s
-            if (this.memory.active) return 3;                                // chain 3s
-            return 15;                                                       // peace 15s
+        pollRate() {
+            if (this.memory.timeLeft < 50 && this.memory.active) return 1;       // panic
+            if (this.memory.active) return 3;                                    // chain
+            return 15;                                                           // peace
         },
 
-        /************ (rest is same as your v2 file) ************/
-        memoryKey: "lieutenant_chain_memory_v2",
-        memory: { active:false, chainID:0, hits:0, timeLeft:0, requiredPace:0,
-                  lastUpdate:Date.now(), hitHistory:[], paceHistory:[] },
+        ingest(intel) {
+            if (!intel || !intel.chain) return;
+            const c = intel.chain;
+
+            this.memory.active = c.current > 0;
+            this.memory.hits = c.current;
+            this.memory.timeLeft = c.timeout;
+            this.memory.lastUpdate = Date.now();
+
+            // pace history
+            if (!this.memory.paceHistory) this.memory.paceHistory = [];
+            this.memory.paceHistory.push({time: Date.now(), hits: 1});
+
+            // clean history
+            const cutoff = Date.now() - 60000;
+            this.memory.paceHistory = this.memory.paceHistory.filter(p => p.time > cutoff);
+
+            this.saveMemory();
+        },
 
         loadMemory() {
             try {
                 const raw = localStorage.getItem(this.memoryKey);
                 if (raw) this.memory = JSON.parse(raw);
-            } catch(e){}
+            } catch {}
         },
 
         saveMemory() {
             try { localStorage.setItem(this.memoryKey, JSON.stringify(this.memory)); }
-            catch(e){}
-        },
-
-        ingestRawIntel(intel) {
-            if (!intel || !intel.chain) return;
-            const c = intel.chain;
-            this.memory.active = c.current>0;
-            this.memory.hits = c.current ?? this.memory.hits;
-            this.memory.timeLeft = c.timeout ?? this.memory.timeLeft;
-            this.memory.lastUpdate = Date.now();
-            this.saveMemory();
+            catch {}
         }
     };
 
