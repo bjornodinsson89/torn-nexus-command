@@ -1,136 +1,163 @@
 /**
- * CODENAME: WAR_SERGEANT v2.1
- * ROLE: Communications Officer
- * RESPONSIBILITY:
- *   - Firebase ↔ War Room sync
- *   - Faction members
- *   - Shared faction targets
+ * WAR_SERGEANT v2.3 — Final Deployment Build
+ * Role:
+ *   - Faction data sync
+ *   - Shared target storage
+ *   - Member roster updates
+ *   - Re-init safe, debounced, hardened
  */
 
-(function () {
+(function(){
 
     const Sergeant = {
-        general:null,
-        db:null,
-        factionId:null,
-        uid:null,
+        general: null,
+        listeners: [],
+        intervals: [],
+
+        // local memory caches
+        factionId: null,
+        members: {},
+        sharedTargets: [],
+
+        debounceTimers: {
+            memberWrite: null,
+            targetWrite: null
+        },
 
         init(General) {
+            this.cleanup();
             this.general = General;
 
-            if (!firebase || !firebase.database) {
-                console.error("[SERGEANT] Missing Firebase SDK");
-                return;
-            }
-            this.db = firebase.database();
+            this.registerListeners();
 
-            // NEW: Listen for shared-target add requests
-            General.signals.listen("REQUEST_ADD_SHARED_TARGET", t => {
-                if (t && t.id) this.addTarget(t);
-                else console.warn("[SERGEANT] Invalid shared target:", t);
+            console.log("%c[Sergeant v2.3] Logistics Online", "color:#7cf");
+        },
+
+        cleanup() {
+            // clear timers
+            Object.values(this.debounceTimers).forEach(t => {
+                if (t) clearTimeout(t);
             });
 
-            // Sync user/faction
-            General.signals.listen("RAW_INTEL", intel => this.trySyncFaction(intel));
+            this.intervals.forEach(id => clearInterval(id));
+            this.intervals = [];
 
-            console.log("%c[Sergeant v2.2] Firebase Comms Online", "color:#0f0");
+            // remove bus listeners
+            this.listeners.forEach(u => {
+                try { u(); } catch {}
+            });
+            this.listeners = [];
         },
 
-        trySyncFaction(intel) {
-            if (!intel || !intel.user) return;
-            const u = intel.user;
-            const uid = u.userID;
-            const fid = u.factionID || null;
-
-            if (this.uid !== uid) this.uid = uid;
-
-            if (fid !== this.factionId) {
-                this.detachListeners();
-                this.factionId = fid;
-                if (fid) this.attachListeners();
-            }
-
-            if (this.factionId) this.upsertMember(u);
+        /* --------------------------
+           LISTENER WRAPPER
+        --------------------------- */
+        listen(ev, fn) {
+            const unsub = this.general.signals.listen(ev, fn);
+            this.listeners.push(unsub);
         },
 
-        attachListeners() {
-            if (!this.factionId) return;
+        /* --------------------------
+           REGISTER EVENT HANDLERS
+        --------------------------- */
+        registerListeners() {
 
-            this.membersRef = this.db.ref(`factions/${this.factionId}/members`);
-            this.targetsRef = this.db.ref(`factions/${this.factionId}/targets`);
+            // When Major requests a shared target to be added
+            this.listen("REQUEST_ADD_SHARED_TARGET", t => {
+                if (!t) return;
+                this.addSharedTarget(t);
+            });
 
-            this.membersRef.on("value", snap => this.handleMembers(snap));
-            this.targetsRef.on("value", snap => this.handleTargets(snap));
+            // Faction SITREP from Colonel/General
+            this.listen("FACTION_SITREP", sitrep => {
+                if (!sitrep) return;
+                this.factionId = sitrep.id || this.factionId;
+                this.syncFactionMembers(sitrep);
+            });
 
-            console.log(`[SERGEANT] Listening to faction ${this.factionId}`);
+            // (Optional future) Shared target list updates
+            // can be synced from remote datastore here:
+            //
+            // this.listen("REMOTE_SHARED_TARGET_UPDATE", tList => {
+            //     this.sharedTargets = tList;
+            //     this.general.signals.dispatch("SHARED_TARGETS_UPDATED", tList);
+            // })
         },
 
-        detachListeners() {
-            if (this.membersRef) this.membersRef.off();
-            if (this.targetsRef) this.targetsRef.off();
-            this.membersRef=null; this.targetsRef=null;
-        },
+        /* --------------------------
+           FACTION MEMBER SYNC
+        --------------------------- */
+        syncFactionMembers(sitrep) {
+            // sitrep.members is normalized by General
+            const newMembers = sitrep.members || {};
 
-        upsertMember(u) {
-            if (!this.factionId || !this.uid) return;
-            const ref = this.db.ref(`factions/${this.factionId}/members/${this.uid}`);
-
-            ref.set({
-                userID:String(this.uid),
-                name:u.name||"Unknown",
-                level:u.level||0,
-                role:u.role||"",
-                status:u.status?.state||"Okay",
-                until:u.status?.until||0,
-                lastSeen:Date.now(),
-                watching:u.watching||false
-            }).catch(e=>console.error("[SERGEANT] upsert error:", e));
-        },
-
-        addTarget(t) {
-            if (!this.factionId || !t || !t.id) return;
-
-            const ref = this.db.ref(`factions/${this.factionId}/targets/${t.id}`);
-
-            ref.set({
-                id:String(t.id),
-                name:t.name||"Unknown",
-                level:t.level||null,
-                faction:t.faction||"",
-                status:t.status||"Okay",
-                timer:t.timer||0,
-                score:t.score||0,
-                lastSeen:t.lastSeen||0
-            }).catch(e=>console.error("[SERGEANT] addTarget error:", e));
-        },
-
-        handleMembers(snap) {
-            const raw = snap.val()||{};
-            const mem = {};
-            for (const id in raw) {
-                const m = raw[id];
-                mem[id] = {
-                    userID:m.userID,
-                    name:m.name,
-                    level:m.level,
-                    role:m.role,
-                    status:m.status,
-                    until:m.until,
-                    lastSeen:m.lastSeen,
-                    watching:m.watching
+            // merge into local cache
+            Object.entries(newMembers).forEach(([id, m]) => {
+                this.members[id] = {
+                    ...(this.members[id] || {}),
+                    ...m
                 };
-            }
-            this.general.signals.dispatch("FACTION_MEMBERS_UPDATE", mem);
+            });
+
+            // schedule debounced write
+            this.debouncedWrite("memberWrite", () => {
+                this.writeFactionMembers();
+            });
+
+            // forward to Major UI
+            this.general.factionMembers = this.members;
+            this.general.signals.dispatch("FACTION_MEMBERS_UPDATE", this.members);
         },
 
-        handleTargets(snap) {
-            const raw = snap.val()||{};
-            const out = {};
-            for (const id in raw) out[id] = raw[id];
-            this.general.signals.dispatch("FACTION_TARGETS_UPDATE", {targets:out});
+        writeFactionMembers() {
+            // FUTURE BACKEND: write to server/Firebase
+            // For now — local only
+            // console.log("[Sergeant] Writing faction members:", this.members);
+        },
+
+        /* --------------------------
+           SHARED TARGETS
+        --------------------------- */
+        addSharedTarget(t) {
+            if (!t || !t.id) return;
+
+            const exists = this.sharedTargets.find(x => String(x.id) === String(t.id));
+            if (exists) return;
+
+            this.sharedTargets.push({
+                id: t.id,
+                name: t.name,
+                level: t.level || 0,
+                status: t.status || "Okay",
+                added: Date.now()
+            });
+
+            this.debouncedWrite("targetWrite", () => {
+                this.writeSharedTargets();
+            });
+
+            this.general.signals.dispatch("SHARED_TARGETS_UPDATED", this.sharedTargets);
+        },
+
+        writeSharedTargets() {
+            // FUTURE: remote write
+            // console.log("[Sergeant] Writing shared targets:", this.sharedTargets);
+        },
+
+        /* --------------------------
+           DEBOUNCE UTILITY
+        --------------------------- */
+        debouncedWrite(key, fn, delay = 500) {
+            if (this.debounceTimers[key]) clearTimeout(this.debounceTimers[key]);
+            this.debounceTimers[key] = setTimeout(fn, delay);
         }
+
     };
 
-    if (window.WAR_GENERAL) WAR_GENERAL.register("Sergeant", Sergeant);
+    if (window.WAR_GENERAL) {
+        WAR_GENERAL.register("Sergeant", Sergeant);
+    } else {
+        console.warn("[Sergeant v2.3] WAR_GENERAL not detected");
+    }
 
 })();
