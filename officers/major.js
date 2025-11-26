@@ -1,8 +1,7 @@
 /**
- * CODENAME: WAR_MAJOR v3
+ * CODENAME: WAR_MAJOR v3.1
  * ROLE: Executive Officer (GUI)
- * RESPONSIBILITY: Full War Room interface (Dashboard, Targets, Faction, Chain, War, Settings)
- */
+ * RESPONSIBILITY: Full War Room interface 
 
 (function () {
     const Major = {
@@ -32,6 +31,15 @@
             this.buildTabSystem();
             this.registerPanels();
             this.bindGlobalActions();
+
+            /* ======================================================
+             * PATCH: Listen for Colonel → Target Score Outputs
+             * ====================================================== */
+            General.signals.listen("TARGET_SCORES_READY", ({ scored }) => {
+                this.applyScoredTargets(scored);
+            });
+
+            console.log("%c[Major v3.1] GUI Online (Scoring + Shared Targets Enabled)", "color:#0af");
         },
 
         /* ------------------ Shadow DOM ------------------ */
@@ -49,103 +57,66 @@
         injectStyles() {
             const style = document.createElement("style");
             style.textContent = `
-                :host {
-                    all: initial;
-                    font-family: Arial, sans-serif;
-                }
+                :host { all: initial; font-family: Arial, sans-serif; }
                 #drawer {
-                    position: fixed;
-                    top: 0;
-                    left: 0;
-                    width: 380px;
-                    height: 100vh;
+                    position: fixed; top: 0; left: 0;
+                    width: 380px; height: 100vh;
                     background: #1b1d22;
                     box-shadow: 3px 0 10px rgba(0,0,0,0.6);
                     color: #eee;
-                    display: flex;
-                    flex-direction: column;
-                    z-index: 999999;
-                    border-right: 1px solid #222;
+                    display: flex; flex-direction: column;
+                    z-index: 999999; border-right: 1px solid #222;
                     box-sizing: border-box;
                 }
                 #drawer-header {
-                    padding: 12px 14px;
-                    background: #23252b;
+                    padding: 12px 14px; background: #23252b;
                     border-bottom: 1px solid #2f3138;
-                    font-size: 14px;
-                    font-weight: 600;
-                    letter-spacing: 0.03em;
+                    font-size: 14px; font-weight: 600;
                 }
                 #drawer-tabs {
-                    display: flex;
-                    flex-direction: row;
-                    background: #18191d;
+                    display: flex; background: #18191d;
                     border-bottom: 1px solid #2f3138;
                 }
                 .tab-btn {
-                    flex: 1;
-                    padding: 8px 4px;
-                    text-align: center;
-                    cursor: pointer;
-                    font-size: 12px;
-                    background: #18191d;
+                    flex: 1; padding: 8px 4px;
+                    text-align: center; cursor: pointer;
+                    font-size: 12px; background: #18191d;
                     border-right: 1px solid #24262c;
-                    color: #aaa;
-                    transition: background 0.12s, color 0.12s;
-                    user-select: none;
+                    color: #aaa; transition: 0.12s;
                 }
-                .tab-btn:last-child { border-right: none; }
                 .tab-btn:hover { background: #222429; color: #fff; }
-                .tab-btn.active { background: #292b31; color: #fff; font-weight: 600; }
+                .tab-btn.active {
+                    background: #292b31;
+                    color: #fff; font-weight: 600;
+                }
                 #tab-content {
-                    flex: 1;
-                    overflow-y: auto;
-                    padding: 10px;
+                    flex: 1; overflow-y: auto; padding: 10px;
                     box-sizing: border-box;
                 }
                 .tab-panel { display: none; }
 
                 .card {
-                    background: #23252b;
-                    border: 1px solid #2f3138;
-                    padding: 10px;
-                    margin-bottom: 12px;
-                    border-radius: 4px;
+                    background: #23252b; border: 1px solid #2f3138;
+                    padding: 10px; margin-bottom: 12px; border-radius: 4px;
                 }
                 .card-title {
-                    font-weight: 600;
-                    font-size: 13px;
-                    margin-bottom: 8px;
+                    font-weight: 600; font-size: 13px; margin-bottom: 8px;
                 }
                 .dash-row {
-                    display: flex;
-                    justify-content: space-between;
-                    font-size: 12px;
-                    padding: 2px 0;
+                    display: flex; justify-content: space-between;
+                    font-size: 12px; padding: 2px 0;
                 }
-                .dash-row span:first-child { color: #aaa; }
-                .dash-row span:last-child { color: #fff; }
-
                 table {
-                    width: 100%;
-                    border-collapse: collapse;
-                    font-size: 12px;
+                    width: 100%; border-collapse: collapse; font-size: 12px;
                 }
-                thead tr { background: #2a2c33; }
                 th, td {
-                    padding: 6px 4px;
-                    border-bottom: 1px solid #34363d;
-                    text-align: left;
+                    padding: 6px 4px; border-bottom: 1px solid #34363d;
                 }
                 tr:hover { background: rgba(255,255,255,0.05); }
                 th { color: #ddd; }
 
                 .online-dot {
-                    width: 8px;
-                    height: 8px;
-                    border-radius: 50%;
-                    display: inline-block;
-                    box-shadow: 0 0 0 1px rgba(0,0,0,0.7);
+                    width: 8px; height: 8px; border-radius: 50%; display: inline-block;
                 }
                 .online-green { background: #2ecc71; }
                 .online-yellow { background: #f1c40f; }
@@ -154,32 +125,29 @@
 
                 .subtabs { display: flex; margin-bottom: 8px; }
                 .subtab {
-                    padding: 4px 8px;
-                    margin-right: 4px;
-                    background: #2c2f36;
-                    border: 1px solid #353840;
-                    border-radius: 4px;
-                    font-size: 11px;
-                    cursor: pointer;
-                    color: #ccc;
+                    padding: 4px 8px; margin-right: 4px;
+                    background: #2c2f36; border-radius: 4px;
+                    font-size: 11px; cursor: pointer; color: #ccc;
                 }
                 .subtab.active {
-                    background: #3b88ff;
-                    border-color: #1d6fe0;
-                    color: #fff;
+                    background: #3b88ff; color: #fff;
                 }
 
                 .btn-sm {
-                    font-size: 11px;
-                    padding: 3px 6px;
+                    font-size: 11px; padding: 3px 6px;
                     border-radius: 3px;
                     border: 1px solid #3a3c42;
-                    background: #2d2f34;
-                    color: #ddd;
+                    background: #2d2f34; color: #ddd;
                     cursor: pointer;
                 }
                 .btn-sm:hover { background: #3b3d44; }
-                input[type="checkbox"] { transform: scale(1.1); }
+
+                .btn-share {
+                    margin-left: 3px;
+                    background: #1d6fe0 !important;
+                    border-color: #1d6fe0 !important;
+                    color: #fff !important;
+                }
             `;
             this.root.appendChild(style);
         },
@@ -238,7 +206,7 @@
 
         /* ------------------ Panels Registration ------------------ */
         registerPanels() {
-            /* DASHBOARD */
+            /* ========== DASHBOARD PANEL ========== */
             const dash = document.createElement("div");
             dash.innerHTML = `
                 <div class="card">
@@ -266,14 +234,14 @@
                     <div class="card-title">War Intel</div>
                     <div class="dash-row"><span>Enemy Active</span><span id="dash-war-active">0</span></div>
                     <div class="dash-row"><span>Threat Level</span><span id="dash-war-threat">0</span></div>
-                    <div class="dash-row"><span>Target Score (Top)</span><span id="dash-war-topscore">0</span></div>
+                    <div class="dash-row"><span>Top Target Score</span><span id="dash-war-topscore">0</span></div>
                     <div class="dash-row"><span>SITREP</span><span id="dash-war-sitrep">OK</span></div>
                 </div>
             `;
             this.elements.tabContainers.dashboard.appendChild(dash);
             this.initDashboardPanel();
 
-            /* TARGETS */
+            /* ========== TARGETS PANEL ========== */
             const tgt = document.createElement("div");
             tgt.innerHTML = `
                 <div class="card">
@@ -303,7 +271,7 @@
             this.elements.tabContainers.targets.appendChild(tgt);
             this.initTargetPanel();
 
-            /* FACTION */
+            /* ========== FACTION PANEL ========== */
             const fac = document.createElement("div");
             fac.innerHTML = `
                 <div class="card">
@@ -327,7 +295,7 @@
             this.elements.tabContainers.faction.appendChild(fac);
             this.initFactionPanel();
 
-            /* CHAIN */
+            /* ========== CHAIN PANEL ========== */
             const chain = document.createElement("div");
             chain.innerHTML = `
                 <div class="card">
@@ -355,7 +323,7 @@
             this.elements.tabContainers.chain.appendChild(chain);
             this.initChainPanel();
 
-            /* WAR */
+            /* ========== WAR PANEL ========== */
             const war = document.createElement("div");
             war.innerHTML = `
                 <div class="card">
@@ -393,14 +361,14 @@
             this.elements.tabContainers.war.appendChild(war);
             this.initWarPanel();
 
-            /* SETTINGS */
+            /* ========== SETTINGS PANEL ========== */
             const settings = document.createElement("div");
             settings.innerHTML = `
                 <div class="card">
                     <div class="card-title">API Configuration</div>
                     <div class="dash-row">
                         <span>Your API Key</span>
-                        <input id="set-api-key" type="password" placeholder="Enter your Torn API key" style="
+                        <input id="set-api-key" type="password" placeholder="Enter API key" style="
                             width: 180px;
                             background:#2b2d33;
                             border:1px solid #3a3d45;
@@ -429,7 +397,7 @@
                 </div>
                 <div class="card">
                     <div class="card-title">About</div>
-                    <div class="dash-row"><span>Version</span><span id="set-version">3.0.0</span></div>
+                    <div class="dash-row"><span>Version</span><span id="set-version">3.1.0</span></div>
                     <div class="dash-row"><span>Status</span><span id="set-status">Operational</span></div>
                 </div>
             `;
@@ -461,7 +429,6 @@
             const G = this.general;
 
             G.signals.listen("USER_SITREP", data => {
-                if (!data) return;
                 if (data.energy != null) this.dashEls.energy.textContent = data.energy;
                 if (data.nerve != null) this.dashEls.nerve.textContent = data.nerve;
                 if (data.cooldown != null) this.dashEls.cooldown.textContent = this.formatMs(data.cooldown * 1000);
@@ -469,7 +436,6 @@
             });
 
             G.signals.listen("FACTION_SITREP", data => {
-                if (!data) return;
                 this.dashEls.f_on.textContent = data.online ?? 0;
                 this.dashEls.f_watch.textContent = data.watchers ?? 0;
                 this.dashEls.f_hosp.textContent = data.hospital ?? 0;
@@ -477,7 +443,6 @@
             });
 
             G.signals.listen("CHAIN_SITREP", data => {
-                if (!data) return;
                 this.dashEls.c_hits.textContent = data.hits ?? 0;
                 this.dashEls.c_time.textContent = this.formatMs((data.timeLeft || 0) * 1000);
                 this.dashEls.c_pace.textContent = `${data.currentPace || 0}/min`;
@@ -485,7 +450,6 @@
             });
 
             G.signals.listen("WAR_SITREP", data => {
-                if (!data) return;
                 this.dashEls.w_active.textContent = data.enemyOnline ?? 0;
                 this.dashEls.w_threat.textContent = data.threat ?? 0;
                 this.dashEls.w_top.textContent = data.topScore ?? 0;
@@ -512,16 +476,19 @@
 
             G.signals.listen("PERSONAL_TARGETS_UPDATE", list => {
                 this.targets.personal = list || [];
+                this.requestScores(list);
                 this.renderTargetTable(true);
             });
 
             G.signals.listen("WAR_TARGETS_UPDATE", list => {
                 this.targets.war = list || [];
+                this.requestScores(list);
                 this.renderTargetTable(true);
             });
 
             G.signals.listen("FACTION_TARGETS_UPDATE", data => {
                 this.targets.shared = Object.values(data.targets || {});
+                this.requestScores(this.targets.shared);
                 this.renderTargetTable(true);
             });
 
@@ -534,23 +501,6 @@
                 this.renderTargetTable(false);
             });
 
-            G.signals.listen("REQUEST_ADD_PERSONAL_TARGET", t => {
-                if (!t || !t.id) return;
-                if (this.targets.personal.some(x => String(x.id) === String(t.id))) return;
-                this.targets.personal.push({
-                    id: t.id,
-                    name: t.name || "Unknown",
-                    level: t.level || null,
-                    faction: t.faction || "",
-                    status: t.status || "Okay",
-                    timer: t.timer || 0,
-                    score: t.score || 0,
-                    lastSeen: t.lastSeen || 0
-                });
-                this.renderTargetTable(true);
-            });
-
-            // Timer engine
             setInterval(() => {
                 let changed = false;
                 Object.values(this.targets).forEach(list => {
@@ -564,6 +514,26 @@
                 });
                 if (changed) this.renderTargetTable(false);
             }, 1000);
+        },
+
+        /* PATCH: Request scoring from Colonel */
+        requestScores(list) {
+            if (!list || !list.length) return;
+            this.general.signals.dispatch("REQUEST_TARGET_SCORES", { targets: list });
+        },
+
+        /* PATCH: Apply Colonel scored list */
+        applyScoredTargets(list) {
+            const scoreMap = {};
+            list.forEach(t => scoreMap[t.id] = t.colonelScore);
+
+            ["personal", "war", "shared"].forEach(cat => {
+                this.targets[cat].forEach(t => {
+                    if (scoreMap[t.id] != null) t.score = scoreMap[t.id];
+                });
+            });
+
+            this.renderTargetTable(true);
         },
 
         sortTargetList(list) {
@@ -598,6 +568,7 @@
             return `<span class="online-dot online-red"></span>`;
         },
 
+        /* PATCHED buildTargetRow: includes SHARE BUTTON */
         buildTargetRow(t) {
             const tr = document.createElement("tr");
             tr.dataset.id = t.id;
@@ -612,6 +583,7 @@
                 <td>
                     <button class="btn-sm btn-sm-act" data-id="${t.id}" data-act="attack">Attack</button>
                     <button class="btn-sm btn-sm-act" data-id="${t.id}" data-act="view">View</button>
+                    <button class="btn-sm btn-share" data-id="${t.id}">Share</button>
                 </td>
             `;
             return tr;
@@ -627,9 +599,8 @@
         /* ------------------ Faction Engine ------------------ */
         initFactionPanel() {
             this.factionBody = this.root.querySelector("#wr-faction-table tbody");
-            this.factionMembers = {};
-
             const G = this.general;
+
             G.signals.listen("FACTION_MEMBERS_UPDATE", mem => {
                 this.factionMembers = mem || {};
                 this.renderFactionTable(true);
@@ -654,18 +625,14 @@
         },
 
         renderFactionTable(full) {
-            const list = Object.values(this.factionMembers);
-            const sorted = [...list].sort((a, b) => {
-                const diffA = Date.now() - (a.lastSeen || 0);
-                const diffB = Date.now() - (b.lastSeen || 0);
-                const onlineA = diffA < 600000;
-                const onlineB = diffB < 600000;
-                if (onlineA && !onlineB) return -1;
-                if (!onlineA && onlineB) return 1;
-                const tA = this.getMemberTimer(a);
-                const tB = this.getMemberTimer(b);
-                if (tA !== tB) return tA - tB;
-                return (a.name || "").localeCompare(b.name || "");
+            const mem = Object.values(this.factionMembers);
+            const sorted = [...mem].sort((a, b) => {
+                const da = Date.now() - (a.lastSeen || 0);
+                const db = Date.now() - (b.lastSeen || 0);
+                const oa = da < 600000, ob = db < 600000;
+                if (oa && !ob) return -1;
+                if (!oa && ob) return 1;
+                return (this.getMemberTimer(a) - this.getMemberTimer(b));
             });
 
             if (full) {
@@ -721,7 +688,6 @@
             const G = this.general;
 
             G.signals.listen("CHAIN_SITREP", data => {
-                if (!data) return;
                 this.chEls.id.textContent = data.chainID ?? 0;
                 this.chEls.hits.textContent = data.hits ?? 0;
                 this.chEls.left.textContent = this.formatMs((data.timeLeft || 0) * 1000);
@@ -730,17 +696,12 @@
                 this.chEls.risk.textContent = data.dropRisk || "Unknown";
                 this.chEls.warnStatus.textContent = data.warning || "None";
                 this.chEls.warnMsg.textContent = data.message || "No warnings";
-
-                if (data.dropRisk === "High") this.chEls.risk.style.color = "#ff5252";
-                else if (data.dropRisk === "Medium") this.chEls.risk.style.color = "#f1c40f";
-                else this.chEls.risk.style.color = "#2ecc71";
             });
 
             G.signals.listen("FACTION_MEMBERS_UPDATE", mem => {
                 let online = 0, watchers = 0;
                 Object.values(mem || {}).forEach(m => {
-                    const diff = Date.now() - (m.lastSeen || 0);
-                    if (diff < 600000) online++;
+                    if (Date.now() - (m.lastSeen || 0) < 600000) online++;
                     if (m.watching) watchers++;
                 });
                 this.chEls.online.textContent = online;
@@ -767,7 +728,6 @@
             this.warTargets = [];
 
             G.signals.listen("WAR_SITREP", data => {
-                if (!data) return;
                 this.warEls.online.textContent = data.enemyOnline ?? 0;
                 this.warEls.hosp.textContent = data.enemyHospital ?? 0;
                 this.warEls.jail.textContent = data.enemyJail ?? 0;
@@ -780,27 +740,29 @@
 
                 if (data.targets) {
                     this.warTargets = data.targets;
+                    this.requestScores(this.warTargets);
                     this.renderWarTargets(true);
                 }
             });
 
-            G.signals.listen("COLONEL_SCORE_OUTPUT", ({ id, score }) => {
-                this.warTargets.forEach(t => {
-                    if (String(t.id) === String(id)) t.score = score;
+            G.signals.listen("TARGET_SCORES_READY", ({ scored }) => {
+                scored.forEach(t => {
+                    const match = this.warTargets.find(x => String(x.id) === String(t.id));
+                    if (match) match.score = t.colonelScore;
                 });
                 this.renderWarTargets(false);
             });
 
             setInterval(() => {
-                let dirty = false;
+                let changed = false;
                 this.warTargets.forEach(t => {
                     if (t.timer > 0) {
                         t.timer -= 1000;
                         if (t.timer < 0) t.timer = 0;
-                        dirty = true;
+                        changed = true;
                     }
                 });
-                if (dirty) this.renderWarTargets(false);
+                if (changed) this.renderWarTargets(false);
             }, 1000);
         },
 
@@ -843,11 +805,7 @@
 
         /* ------------------ Settings Engine ------------------ */
         initSettingsPanel() {
-            this.settings = {
-                apiKey: "",
-                autoWatch: false,
-                debug: false
-            };
+            this.settings = { apiKey: "", autoWatch: false, debug: false };
             this.loadSettings();
             this.bindSettingsControls();
         },
@@ -862,9 +820,7 @@
                 this.root.querySelector("#set-api-key").value = this.settings.apiKey;
                 this.root.querySelector("#set-auto-watch").checked = this.settings.autoWatch;
                 this.root.querySelector("#set-debug").checked = this.settings.debug;
-            } catch (e) {
-                console.warn("[WAR_MAJOR] Failed to load settings", e);
-            }
+            } catch (e) {}
         },
 
         bindSettingsControls() {
@@ -873,6 +829,7 @@
             el.querySelector("#set-save-api").onclick = () => {
                 this.settings.apiKey = el.querySelector("#set-api-key").value.trim();
                 this.saveSettings();
+                if (this.settings.apiKey) this.general.intel.setCredentials(this.settings.apiKey);
                 alert("API key saved.");
             };
 
@@ -895,20 +852,32 @@
 
         /* ------------------ Global Actions ------------------ */
         bindGlobalActions() {
-            // Global event delegation for all .btn-sm-act buttons
             this.root.addEventListener("click", e => {
-                const btn = e.target.closest(".btn-sm-act");
-                if (!btn) return;
-                const id = btn.dataset.id;
-                const act = btn.dataset.act;
-                if (!id || !act) return;
-
-                if (act === "attack") {
-                    window.open(`/loader.php?sid=attack&user2ID=${id}`, "_blank");
-                } else if (act === "view") {
-                    window.open(`/profiles.php?XID=${id}`, "_blank");
+                const actBtn = e.target.closest(".btn-sm-act");
+                const shareBtn = e.target.closest(".btn-share");
+                if (actBtn) {
+                    const id = actBtn.dataset.id;
+                    const act = actBtn.dataset.act;
+                    if (act === "attack") window.open(`/loader.php?sid=attack&user2ID=${id}`, "_blank");
+                    if (act === "view") window.open(`/profiles.php?XID=${id}`, "_blank");
+                }
+                if (shareBtn) {
+                    const id = shareBtn.dataset.id;
+                    const target = this.findTarget(id);
+                    if (target) {
+                        this.general.signals.dispatch("REQUEST_ADD_SHARED_TARGET", target);
+                        alert(`Shared target: ${target.name}`);
+                    }
                 }
             });
+        },
+
+        findTarget(id) {
+            for (const cat of Object.values(this.targets)) {
+                const t = cat.find(x => String(x.id) === String(id));
+                if (t) return t;
+            }
+            return null;
         }
     };
 
