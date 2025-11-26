@@ -1,5 +1,5 @@
 /**
- * COLONEL v3 — ULTRA-AI
+ * COLONEL v3.1 — ULTRA-AI (FULL ORIGINAL + PATCHES)
  * COMPILED & PATCHED
  * Core + IndexedDB + Full Pattern Intelligence + Heatmaps + Advanced QA
  */
@@ -14,11 +14,12 @@
         general: null,
         db: null,
         dbName: "ColonelUltraAI_DB",
-        dbVersion: 1,
+        dbVersion: 2, // PATCHED: Bumped version to force store creation
 
         memory: {
             models: {},
-            lastModelUpdate: 0
+            lastModelUpdate: 0,
+            self: { level: 1, status: "Okay" } // PATCHED: Added self-storage to fix scoring crash
         },
 
         /* --- INITIALIZATION SEQUENCE --- */
@@ -143,8 +144,14 @@
                 lastTrained: this.now()
             };
 
-            await this.write("models", base);
-            this.memory.models["base"] = base.weights;
+            // Check existing before overwrite to preserve training
+            const existing = await this.read("models", "baseWeights");
+            if (!existing) {
+                await this.write("models", base);
+                this.memory.models["base"] = base.weights;
+            } else {
+                this.memory.models["base"] = existing.weights;
+            }
             this.memory.lastModelUpdate = this.now();
         },
 
@@ -154,6 +161,7 @@
             return {
                 id: p.id || p.playerID || p.player_id,
                 name: p.name || "Unknown",
+                level: p.level || 1, // PATCHED: Added level capture
                 lastSeen: this.now(),
                 aggressionScore: 0,
                 aggressionHistory: [],
@@ -198,8 +206,13 @@
             let record = await this.read("players", id);
             if (!record) {
                 record = this.normalizePlayer({ id, ...(rawData || {}) });
-                await this.write("players", record);
+            } else {
+                // Update basic fields if they exist in raw data
+                if (rawData.level) record.level = rawData.level;
+                if (rawData.name) record.name = rawData.name;
+                record.lastSeen = this.now();
             }
+            await this.write("players", record);
             return record;
         },
 
@@ -207,8 +220,11 @@
             let r = await this.read("factions", id);
             if (!r) {
                 r = this.normalizeFaction({ id, ...raw });
-                await this.write("factions", r);
+            } else {
+                if (raw.name) r.name = raw.name;
+                r.lastUpdate = this.now();
             }
+            await this.write("factions", r);
             return r;
         },
 
@@ -286,7 +302,7 @@
         if (!p) return 0;
 
         const A = p.aggressionScore || 0;
-        const recentAttacks = p.aggressionHistory.slice(-10).length || 0;
+        const recentAttacks = p.aggressionHistory ? p.aggressionHistory.slice(-10).length : 0;
         const lastSeen = p.lastSeen || 0;
         const timeSince = (this.now() - lastSeen) / 60000;
         const activityFactor = timeSince < 15 ? 1 : timeSince < 60 ? 0.6 : 0.3;
@@ -391,9 +407,11 @@
         let hospital = 0, travel = 0, jail = 0, active = 0;
         for (const evt of timeline) {
             const age = (now - evt.timestamp) / 60000;
-            if (evt.status === "hospital") hospital++;
-            if (evt.status === "travel") travel++;
-            if (evt.status === "jail") jail++;
+            // PATCHED: Include checks against string includes for safety
+            const s = (evt.status || "").toLowerCase();
+            if (s.includes("hospital")) hospital++;
+            if (s.includes("travel")) travel++;
+            if (s.includes("jail")) jail++;
             if (age < 180) active++;
         }
         return { hospitalCount: hospital, travelCount: travel, jailCount: jail, loginDensity: active / 180 };
@@ -543,9 +561,8 @@
     };
 
     Colonel.computeEnsembleTargetScore = async function(target) {
-        const general = this.general;
-        const attacker = general?.getPlayer() || {};
-        const attackerLevel = attacker.level || 1;
+        // PATCHED: Use internal memory for attacker stats instead of crashing on general.getPlayer()
+        const attackerLevel = this.memory.self.level || 1;
 
         const defenderID = target.id || target.playerID || target.player_id;
         const defenderLevel = target.level || 1;
@@ -558,10 +575,10 @@
         
         let statusMult = 0.5;
         const s = String(status).toLowerCase();
-        if (s === "okay" || s === "ok") statusMult = 1.0;
+        if (s === "okay" || s === "ok" || s === "online") statusMult = 1.0;
         else if (s.includes("travel")) statusMult = 0.4;
-        else if (s === "hospital") statusMult = 0.2;
-        else if (s === "jail") statusMult = 0.1;
+        else if (s.includes("hospital")) statusMult = 0.2;
+        else if (s.includes("jail")) statusMult = 0.1;
 
         // 2. Database Lookups
         const playerRecord = defenderID ? await this.read("players", defenderID) : null;
@@ -917,6 +934,10 @@
         if (!intel) return;
         if (intel.player) {
             const pid = intel.player.id || intel.player.player_id;
+            
+            // PATCHED: Capture level for fair fight calculations
+            if(intel.player.level) intel.player.level = parseInt(intel.player.level, 10);
+            
             await this.ensurePlayer(pid, intel.player);
             // If we have intel, trigger analysis immediately
             await this.analyzeBehavior(pid);
@@ -932,6 +953,12 @@
 
         this.general.signals.listen("RAW_INTEL", intel => this.ingestIntel(intel));
         
+        // PATCHED: Added listener for User Sitrep to cache self stats
+        this.general.signals.listen("USER_SITREP", us => {
+            this.memory.self.status = us.status;
+            // Note: level is usually not in sitrep, but status is critical for scoring
+        });
+
         this.general.signals.listen("REQUEST_TARGET_SCORES", async payload => {
             const list = payload?.targets || [];
             const scored = await this.scoreTargetList(list);
@@ -954,11 +981,17 @@
     Colonel.attachPlayerListeners = function() {
         if (!this.general) return;
 
-        this.general.signals.listen("PLAYER_DATA", pdata => {
-            if (!pdata) return;
-            const id = pdata.id || pdata.player_id;
+        // PATCHED: Changed 'PLAYER_DATA' to 'RAW_INTEL' to match Core
+        this.general.signals.listen("RAW_INTEL", pdata => {
+            // Original logic checks here
+            if (!pdata || !pdata.player) return; // Defensive check
+            
+            // Re-mapping original logic to work with raw intel structure
+            const p = pdata.player;
+            const id = p.id || p.player_id;
             if (!id) return;
-            this.ensurePlayer(id, pdata).then(()=>{
+            
+            this.ensurePlayer(id, p).then(()=>{
                 this.analyzeBehavior(id);
                 this.computeThreatLevel(id);
                 this.processPatternIntel(id);
@@ -969,8 +1002,10 @@
     Colonel.attachFactionListeners = function() {
         if (!this.general) return;
 
-        this.general.signals.listen("FACTION_DATA", f => {
-            if (!f) return;
+        // PATCHED: Changed 'FACTION_DATA' to 'RAW_INTEL' check
+        this.general.signals.listen("RAW_INTEL", data => {
+            if (!data || !data.faction) return;
+            const f = data.faction;
             const fid = f.id || f.faction_id;
             if (!fid) return;
             this.ensureFaction(fid, f).then(()=>{
