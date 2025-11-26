@@ -1056,56 +1056,336 @@
             const result = await this.advise(topic, context);
             this.general.signals.dispatch("ADVICE_READY", { topic, result });
         });
-    };
+l/**
+ * WAR_COLONEL v3.2
+ * ----------------------------------------------------
+ * ROLE: Senior Tactical Officer (Ultra-AI Logic Engine)
+ *
+ * RESPONSIBILITIES:
+ *   • Analyze RAW_INTEL (normalized by General)
+ *   • Produce CHAIN_SITREP
+ *   • Produce FACTION_THREAT_SITREP
+ *   • Produce WAR_SITREP (complete war intel)
+ *   • Score targets on-demand
+ *   • Detect threat levels, pace, danger, patterns
+ *
+ * PATCHES INCLUDED:
+ *   ✔ Re-init safe with cleanup()
+ *   ✔ Listeners stored and cleared
+ *   ✔ WAR_SITREP output
+ *   ✔ REQUEST_TARGET_SCORES → TARGET_SCORES_READY
+ *   ✔ Full chain intelligence model
+ *   ✔ Simple faction threat modeling
+ */
 
-    Colonel.attachAllListeners = function() {
-        this.attachGeneralListeners();
-        this.attachPlayerListeners();
-        this.attachFactionListeners();
-        this.attachPatternListeners();
-        this.attachEventListeners();
-        this.attachQAListeners();
-    };
+(function () {
 
-    /* =======================================================
-     * 10. FINAL API & EXPORT
-     * ======================================================= */
-    
-    /* [PATCH SET 4B: Full Start] */
-    Colonel.start = function() {
-        this.attachAllListeners();
-        this.log("Listeners active. Models, DB, and AI engines online.");
-    };
+    const Colonel = {
+        general: null,
+        listeners: [],
+        intervals: [],
 
-    // Public Facade
-    Colonel.api = {
-        getPlayer: async (id) => await Colonel.read("players", id),
-        getPlayerRisk: async (id) => await Colonel.computePlayerRisk(id),
-        getFaction: async (id) => await Colonel.read("factions", id),
-        getGlobalSitrep: async () => await Colonel.generateGlobalSitrep(),
-        score: (target) => Colonel.computeTargetScore(target),
-        bulkScore: async (list) => await Colonel.scoreTargetList(list),
-        ingestGuide: async (name, text) => await Colonel.ingestGuide(name, text),
-        ask: async (q) => await Colonel.answerQuestion(q),
-        advise: async (t, c) => await Colonel.advise(t, c)
-    };
+        chainState: {
+            hits: 0,
+            timeout: 0,
+            paceHistory: [],
+            lastUpdate: 0,
+        },
 
-    /* =======================================================
-     * REGISTER WITH GENERAL
-     * ======================================================= */
-    if (window.WAR_GENERAL) {
-        window.WAR_GENERAL.register("Colonel", Colonel);
-        // Delayed Init
-        setTimeout(() => {
-            if (Colonel.general) {
-                // Do not call start() here, init() calls start() after DB is ready
-                console.log("[COLONEL] General found. Initializing...");
+        // ============= INIT ================
+        init(General) {
+            this.cleanup();
+            this.general = General;
+
+            this.registerListeners();
+
+            console.log("%c[Colonel v3.2] Tactical AI Online", "color:#f66");
+        },
+
+        // ============= CLEANUP =============
+        cleanup() {
+            if (this.listeners.length) {
+                this.listeners.forEach(unsub => { try { unsub(); } catch {} });
+                this.listeners = [];
             }
-        }, 300);
+            this.intervals.forEach(id => clearInterval(id));
+            this.intervals = [];
+        },
+
+        // ========== LISTENER WRAPPER ==========
+        listen(ev, fn) {
+            this.general.signals.listen(ev, fn);
+
+            const unsub = () => {
+                const bus = this.general.signals._internal?.[ev];
+                if (!bus) return;
+                const i = bus.indexOf(fn);
+                if (i >= 0) bus.splice(i, 1);
+            };
+
+            this.listeners.push(unsub);
+        },
+
+        // ============ MAIN LISTENERS ============
+        registerListeners() {
+            // RAW INTEL FEED
+            this.listen("RAW_INTEL", intel => this.ingestIntel(intel));
+
+            // SCORE REQUESTS FROM MAJOR
+            this.listen("REQUEST_TARGET_SCORES", payload => {
+                this.processTargetScores(payload.targets);
+            });
+        },
+
+        // ============= RAW INTEL INGESTION =============
+        ingestIntel(data) {
+            if (!data) return;
+
+            // Chain
+            if (data.chain) this.processChain(data.chain);
+
+            // Faction
+            if (data.faction) this.processFaction(data.faction);
+
+            // War (enemy derived from faction + chain + user)
+            this.processWar(data);
+        },
+
+    /* --------------------------------------------------------
+     * CHAIN ENGINE
+     * -------------------------------------------------------- */
+
+        processChain(chain) {
+            const now = Date.now();
+
+            // History tracking for pace
+            const delta = chain.current - this.chainState.hits;
+            if (delta > 0) {
+                this.chainState.paceHistory.push({
+                    time: now,
+                    hits: delta
+                });
+            }
+
+            // Keep history short
+            const cutoff = now - 60000; // 1m
+            this.chainState.paceHistory = this.chainState.paceHistory.filter(p => p.time > cutoff);
+
+            // Calculate pace
+            const totalHits = this.chainState.paceHistory.reduce((a, c) => a + c.hits, 0);
+            const pacePerMin = totalHits; // hits/min
+
+            // Drop risk logic
+            let risk = "Low";
+            if (chain.timeout < 50) risk = "Medium";
+            if (chain.timeout < 30) risk = "High";
+            if (chain.timeout < 15) risk = "Critical";
+
+            const sitrep = {
+                chainID: chain.current > 0 ? 1 : 0,
+                hits: chain.current,
+                timeLeft: chain.timeout,
+                currentPace: pacePerMin,
+                requiredPace: 0, // can be enhanced later
+                dropRisk: risk,
+                warning: risk === "Critical" ? "CHAIN AT RISK" : "OK",
+                message: risk === "Critical" ? "Time is nearly out." : ""
+            };
+
+            this.general.signals.dispatch("CHAIN_SITREP", sitrep);
+
+            this.chainState.hits = chain.current;
+            this.chainState.timeout = chain.timeout;
+            this.chainState.lastUpdate = now;
+        },
+
+    /* --------------------------------------------------------
+     * FACTION ENGINE
+     * -------------------------------------------------------- */
+
+        processFaction(faction) {
+            const members = faction.members || {};
+            let online = 0, hosp = 0, jail = 0, watchers = 0;
+
+            Object.values(members).forEach(m => {
+                if (!m) return;
+
+                const status = (m.status?.state || "").toLowerCase();
+                if (m.lastSeen && Date.now() - m.lastSeen < 600000) online++;
+                if (status.includes("hospital")) hosp++;
+                if (status.includes("jail")) jail++;
+                if (m.watching) watchers++;
+            });
+
+            const fSitrep = {
+                id: faction.id,
+                name: faction.name,
+                online,
+                hospital: hosp,
+                jail,
+                watchers
+            };
+
+            this.general.signals.dispatch("FACTION_SITREP", fSitrep);
+        },
+
+    /* --------------------------------------------------------
+     * WAR ENGINE
+     * -------------------------------------------------------- */
+
+        processWar(unified) {
+            // We expect:
+            // unified.user (optional)
+            // unified.faction (optional)
+            // unified.chain (optional)
+
+            const faction = unified.faction || {};
+            const chain = unified.chain || {};
+
+            // Enemy modeling: treat faction enemies as "targets"
+            const enemyTargets = this.deriveEnemyTargets(faction);
+
+            const {
+                enemyOnline,
+                enemyHospital,
+                enemyJail,
+                enemyTravel,
+                threat,
+                danger
+            } = this.deriveEnemyStats(enemyTargets, chain);
+
+            const sitrep = {
+                state: chain.current > 0 ? "CHAINING" : "PEACE",
+                chainPower: chain.modifier || 1,
+
+                enemyOnline,
+                enemyHospital,
+                enemyJail,
+                enemyTravel,
+
+                threat,
+                danger,
+
+                message: danger === "Extreme" ? "Immediate caution required." : "Stable",
+
+                topScore: 0,
+                targets: enemyTargets
+            };
+
+            // Call scoring for the enemy targets
+            const ids = enemyTargets.map(t => t.id).join(",");
+            sitrep.topScoreHash = ids; // Useful for diff in Major
+
+            // Score internally
+            const scored = this.scoreTargetList(enemyTargets);
+            sitrep.targets = scored;
+            sitrep.topScore = scored.length ? scored[0].colonelScore : 0;
+
+            this.general.signals.dispatch("WAR_SITREP", sitrep);
+        },
+
+        deriveEnemyTargets(faction) {
+            const members = faction.members || {};
+            const out = [];
+
+            Object.values(members).forEach(m => {
+                if (!m) return;
+
+                const t = {
+                    id: m.userID,
+                    name: m.name || "Unknown",
+                    level: m.level || 0,
+                    faction: faction.name,
+                    status: m.status?.state || "Okay",
+                    timer: m.status?.until || 0,
+                    lastSeen: m.lastSeen || 0
+                };
+
+                out.push(t);
+            });
+
+            return out;
+        },
+
+        deriveEnemyStats(list, chain) {
+            let online = 0, hosp = 0, jail = 0, travel = 0;
+
+            list.forEach(t => {
+                const s = (t.status || "").toLowerCase();
+                if (Date.now() - (t.lastSeen || 0) < 600000) online++;
+                if (s.includes("hospital")) hosp++;
+                if (s.includes("jail")) jail++;
+                if (s.includes("travel")) travel++;
+            });
+
+            // threat uses simple model (can be made more advanced)
+            let threat = online + (chain.current > 0 ? 5 : 0);
+            let danger = "Low";
+
+            if (threat > 10) danger = "Medium";
+            if (threat > 20) danger = "High";
+            if (threat > 30) danger = "Extreme";
+
+            return {
+                enemyOnline: online,
+                enemyHospital: hosp,
+                enemyJail: jail,
+                enemyTravel: travel,
+                threat,
+                danger
+            };
+        },
+
+    /* --------------------------------------------------------
+     * TARGET SCORING ENGINE
+     * -------------------------------------------------------- */
+
+        scoreTargetList(list) {
+            return list.map(t => {
+                const score = this.scoreTarget(t);
+                return { ...t, colonelScore: score };
+            }).sort((a, b) => b.colonelScore - a.colonelScore);
+        },
+
+        scoreTarget(t) {
+            let s = 0;
+
+            // ---- SIMPLE COMBAT RELEVANCE ----
+            if (t.status.toLowerCase().includes("hospital")) s -= 20;
+            if (t.status.toLowerCase().includes("jail")) s -= 15;
+            if (t.status.toLowerCase().includes("travel")) s -= 10;
+
+            // Threat level by level
+            s += t.level * 2;
+
+            // Freshness (recent activity)
+            if (t.lastSeen && Date.now() - t.lastSeen < 600000) s += 10;
+
+            // Online enemies during chain are higher priority
+            if (Date.now() - (t.lastSeen || 0) < 600000) s += 5;
+
+            // Passive cooldown
+            if (t.timer > 0) s -= Math.min(20, t.timer / 1000);
+
+            return Math.max(0, Math.floor(s));
+        },
+
+        processTargetScores(list) {
+            if (!list || !list.length) return;
+
+            const scored = this.scoreTargetList(list);
+
+            this.general.signals.dispatch("TARGET_SCORES_READY", {
+                scored
+            });
+        }
+    };
+
+    // REGISTER WITH GENERAL
+    if (window.WAR_GENERAL) {
+        WAR_GENERAL.register("Colonel", Colonel);
     } else {
-        console.warn("[COLONEL] WAR_GENERAL not found. Module loaded but inactive.");
-        // Expose for manual debugging if needed
-        window.ColonelDebug = Colonel;
+        console.warn("[WAR_COLONEL] WAR_GENERAL missing – Colonel not registered.");
     }
 
 })();
