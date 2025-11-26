@@ -1,18 +1,7 @@
 /**
  * WAR_MAJOR v3.2 — Final Commander Interface System
  * --------------------------------------------------
- * Features:
- *   • Slide-out drawer (left by default, switchable to right side)
- *   • Draggable floating toggle button (free-floating, remembers position)
- *   • Resizable drawer (width + height)
- *   • Re-initializable (safe cleanup of listeners & intervals)
- *   • Overview tab containing all info panels
- *   • Targets, Faction, War, Chain, AI, Settings tabs
- *   • Inline Chain Settings panel
- *   • Score diff-checking (no spam)
- *   • Defensive intel calls
- *   • Stable Shadow DOM lifecycle
- */
+ * 
 
 (function() {
     const Major = {
