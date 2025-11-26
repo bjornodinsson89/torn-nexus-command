@@ -1,435 +1,235 @@
 /**
- * WAR_MAJOR v3.2 — Final Commander Interface System
- * --------------------------------------------------
- * 
+ * WAR_MAJOR v3.2.1 — Final Deployment Build
+ * GUI Officer — Full Slide-Out Drawer, Reinit Safe, Polished UI
+ */
 
-(function() {
+(function () {
+
     const Major = {
-        // =========================
-        // CORE STATE
-        // =========================
         general: null,
-        hostEl: null,
-        root: null,
-        drawerEl: null,
-        toggleBtn: null,
 
+        // internal state
+        host: null,
+        root: null,
+        drawer: null,
+        toggleBtn: null,
         intervals: [],
         listeners: [],
-        resizeObserver: null,
+        settings: {
+            drawerSide: "left",
+            toggleX: 18,
+            toggleY: 200,
+        },
 
-        drawerSide: "left", // user setting (left | right)
-        drawerOpen: false,
-
-        drawerWidth: 380,
-        drawerHeight: window.innerHeight * 0.95,
-
-        targets: { personal: [], war: [], shared: [] },
+        // data caches
         factionMembers: {},
         warTargets: [],
+        targets: { personal: [], war: [], shared: [] },
+        scoreHash: "",
 
-        scoreHash: "", // For diff-checking
-
-        settings: {
-            apiKey: "",
-            autoWatch: false,
-            debug: false,
-            drawerSide: "left",
-            toggleBtnX: 20,
-            toggleBtnY: 200
-        },
-
-        // =========================
-        // INIT
-        // =========================
         init(General) {
-            // CLEAN PREVIOUS INSTANCES
             this.cleanup();
-
             this.general = General;
 
-            // LOAD USER SETTINGS
             this.loadSettings();
-
-            // CREATE HOST & SHADOW DOM
             this.createHost();
             this.createShadow();
-
-            // CREATE TOGGLE BUTTON
             this.createToggleButton();
-
-            // CREATE DRAWER
             this.createDrawer();
-
-            // INIT PANELS & UI
             this.buildTabs();
-            this.registerTabPanels();
+            this.buildAllPanels();
+            this.wireGeneralSignals();
 
-            // REGISTER SIGNAL LISTENERS
-            this.registerGeneralListeners();
-
-            // READY
-            console.log("%c[Major v3.2] Command Interface Online", "color:#0af");
+            console.log("%c[Major v3.2.1] GUI Online", "color:#0af");
         },
 
-        // =========================
-        // CLEANUP
-        // =========================
+        /* --------------------------
+           CLEANUP & SAFE-REINIT
+        --------------------------- */
         cleanup() {
-            // Kill intervals
+            // remove intervals
             this.intervals.forEach(id => clearInterval(id));
             this.intervals = [];
 
-            // Remove signal listeners
-            if (this.listeners.length) {
-                this.listeners.forEach(unsub => { try { unsub(); } catch {} });
-                this.listeners = [];
+            // remove listeners
+            this.listeners.forEach(u => { try { u(); } catch {} });
+            this.listeners = [];
+
+            // remove host if exists
+            if (this.host && this.host.parentNode) {
+                this.host.remove();
             }
 
-            // Remove old root if exists
-            if (this.hostEl && this.hostEl.parentNode) {
-                this.hostEl.remove();
-            }
-
-            this.hostEl = null;
+            this.host = null;
             this.root = null;
-            this.drawerEl = null;
+            this.drawer = null;
             this.toggleBtn = null;
         },
 
-        // =========================
-        // SETTINGS
-        // =========================
+        /* --------------------------
+           SETTINGS
+        --------------------------- */
         loadSettings() {
             try {
-                const saved = JSON.parse(localStorage.getItem("major_v32_settings")) || {};
-                Object.assign(this.settings, saved);
-                this.drawerSide = this.settings.drawerSide;
-            } catch(e){}
+                const d = JSON.parse(localStorage.getItem("major_v321_settings")) || {};
+                Object.assign(this.settings, d);
+            } catch {}
         },
 
         saveSettings() {
-            localStorage.setItem("major_v32_settings", JSON.stringify(this.settings));
+            localStorage.setItem("major_v321_settings", JSON.stringify(this.settings));
         },
 
-        // =========================
-        // HOST + SHADOW
-        // =========================
+        /* --------------------------
+           HOST + SHADOW DOM
+        --------------------------- */
         createHost() {
-            const host = document.createElement("div");
-            host.id = "war-major-host";
-            document.body.appendChild(host);
-            this.hostEl = host;
+            const el = document.createElement("div");
+            el.id = "war-major-host";
+            document.body.appendChild(el);
+            this.host = el;
         },
 
         createShadow() {
-            this.root = this.hostEl.attachShadow({ mode: "open" });
+            this.root = this.host.attachShadow({ mode: "open" });
             this.injectStyles();
         },
 
-        // =========================
-        // STYLES
-        // =========================
-        injectStyles() {
-            const style = document.createElement("style");
-            style.textContent = `
-                :host {
-                    all: initial;
-                    font-family: Arial, sans-serif;
-                }
-
-                /* Toggle Button */
-                #war-toggle-btn {
-                    position: fixed;
-                    z-index: 100000000;
-                    width: 46px;
-                    height: 46px;
-                    background: #1b1d22;
-                    border: 1px solid #2f3138;
-                    border-radius: 50%;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    color: #eee;
-                    font-size: 12px;
-                    cursor: pointer;
-                    box-shadow: 0 0 8px rgba(0,0,0,0.6);
-                    user-select: none;
-                }
-
-                /* Drawer */
-                #drawer {
-                    position: fixed;
-                    top: 0;
-                    width: ${this.drawerWidth}px;
-                    height: ${this.drawerHeight}px;
-                    background: #1b1d22;
-                    border: 1px solid #222;
-                    box-shadow: 3px 0 10px rgba(0,0,0,0.6);
-                    display: flex;
-                    flex-direction: column;
-                    z-index: 9999999;
-                    transition: transform 0.25s ease;
-                }
-
-                #drawer.left {
-                    left: 0;
-                    transform: translateX(-100%);
-                }
-                #drawer.right {
-                    right: 0;
-                    transform: translateX(100%);
-                }
-
-                #drawer.open.left {
-                    transform: translateX(0);
-                }
-                #drawer.open.right {
-                    transform: translateX(0);
-                }
-
-                #drawer-header {
-                    padding: 12px 14px;
-                    background: #23252b;
-                    border-bottom: 1px solid #2f3138;
-                    font-size: 14px;
-                    font-weight: 600;
-                }
-
-                /* Resize handles */
-                #resize-handle-right {
-                    position: absolute;
-                    top: 0;
-                    right: 0;
-                    width: 6px;
-                    height: 100%;
-                    cursor: ew-resize;
-                    background: transparent;
-                }
-                #resize-handle-bottom {
-                    position: absolute;
-                    bottom: 0;
-                    left: 0;
-                    width: 100%;
-                    height: 6px;
-                    cursor: ns-resize;
-                    background: transparent;
-                }
-
-                /* Tabs */
-                #drawer-tabs {
-                    display: flex;
-                    background: #18191d;
-                    border-bottom: 1px solid #2f3138;
-                }
-                .tab-btn {
-                    flex: 1;
-                    padding: 8px 4px;
-                    text-align: center;
-                    cursor: pointer;
-                    font-size: 12px;
-                    background: #18191d;
-                    border-right: 1px solid #24262c;
-                    color: #aaa;
-                    user-select: none;
-                }
-                .tab-btn.active {
-                    background: #292b31;
-                    color: #fff;
-                }
-
-                #tab-content {
-                    flex: 1;
-                    overflow-y: auto;
-                    padding: 10px;
-                }
-                .tab-panel { display: none; }
-
-                /* Cards */
-                .card {
-                    background: #23252b;
-                    border: 1px solid #2f3138;
-                    padding: 10px;
-                    margin-bottom: 12px;
-                    border-radius: 4px;
-                }
-                .card-title {
-                    font-weight: 600;
-                    font-size: 13px;
-                    margin-bottom: 8px;
-                }
-                .dash-row {
-                    display: flex;
-                    justify-content: space-between;
-                    font-size: 12px;
-                    padding: 2px 0;
-                }
-
-                .btn-sm {
-                    font-size: 11px;
-                    padding: 3px 6px;
-                    border-radius: 3px;
-                    border: 1px solid #3a3c42;
-                    background: #2d2f34;
-                    color: #ddd;
-                    cursor: pointer;
-                }
-            `;
-            this.root.appendChild(style);
-        },
-
-        // =========================
-        // TOGGLE BUTTON
-        // =========================
+        /* --------------------------
+           TOGGLE BUTTON
+        --------------------------- */
         createToggleButton() {
             const btn = document.createElement("div");
             btn.id = "war-toggle-btn";
             btn.textContent = "⚔️";
-
-            btn.style.left = this.settings.toggleBtnX + "px";
-            btn.style.top = this.settings.toggleBtnY + "px";
+            btn.style.left = this.settings.toggleX + "px";
+            btn.style.top = this.settings.toggleY + "px";
 
             this.toggleBtn = btn;
             this.root.appendChild(btn);
 
-            this.makeToggleDraggable(btn);
-            btn.addEventListener("click", () => this.toggleDrawer());
-        },
+            this.makeDraggable(btn);
 
-        makeToggleDraggable(btn) {
-            let drag = false;
-            let offsetX = 0, offsetY = 0;
-
-            const down = (e) => {
-                drag = true;
-                offsetX = e.clientX - btn.getBoundingClientRect().left;
-                offsetY = e.clientY - btn.getBoundingClientRect().top;
-                e.stopPropagation();
-            };
-
-            const move = (e) => {
-                if (!drag) return;
-                let x = e.clientX - offsetX;
-                let y = e.clientY - offsetY;
-                btn.style.left = x + "px";
-                btn.style.top = y + "px";
-
-                // Save immediately
-                this.settings.toggleBtnX = x;
-                this.settings.toggleBtnY = y;
-                this.saveSettings();
-            };
-
-            const up = () => drag = false;
-
-            btn.addEventListener("mousedown", down);
-            window.addEventListener("mousemove", move);
-            window.addEventListener("mouseup", up);
+            btn.addEventListener("click", (e) => {
+                if (this._dragging) return;
+                this.toggleDrawer();
+            });
         },
 
         toggleDrawer() {
-            this.drawerOpen = !this.drawerOpen;
-            if (this.drawerOpen) {
-                this.drawerEl.classList.add("open");
-            } else {
-                this.drawerEl.classList.remove("open");
-            }
+            if (!this.drawer) return;
+            this.drawer.classList.toggle("open");
         },
 
-        // =========================
-        // DRAWER
-        // =========================
+        makeDraggable(btn) {
+            let dragging = false;
+            let offsetX = 0, offsetY = 0;
+
+            btn.addEventListener("mousedown", e => {
+                dragging = true;
+                this._dragging = false;
+                offsetX = e.clientX - btn.getBoundingClientRect().left;
+                offsetY = e.clientY - btn.getBoundingClientRect().top;
+            });
+
+            window.addEventListener("mousemove", e => {
+                if (!dragging) return;
+                this._dragging = true; // distinguish drag vs click
+
+                const x = e.clientX - offsetX;
+                const y = e.clientY - offsetY;
+
+                btn.style.left = x + "px";
+                btn.style.top = y + "px";
+
+                this.settings.toggleX = x;
+                this.settings.toggleY = y;
+                this.saveSettings();
+            });
+
+            window.addEventListener("mouseup", () => dragging = false);
+        },
+
+        /* --------------------------
+           DRAWER
+        --------------------------- */
         createDrawer() {
             const drawer = document.createElement("div");
             drawer.id = "drawer";
-            drawer.classList.add(this.drawerSide);
-
-            drawer.style.width = this.drawerWidth + "px";
-            drawer.style.height = this.drawerHeight + "px";
+            drawer.classList.add(this.settings.drawerSide);
 
             drawer.innerHTML = `
                 <div id="drawer-header">WAR ROOM</div>
                 <div id="drawer-tabs"></div>
                 <div id="tab-content"></div>
-
-                <div id="resize-handle-right"></div>
-                <div id="resize-handle-bottom"></div>
+                <div id="resize-right"></div>
+                <div id="resize-bottom"></div>
             `;
 
-            this.drawerEl = drawer;
+            this.drawer = drawer;
             this.root.appendChild(drawer);
 
-            this.setupResizeHandles();
+            this.setupResizeHandles(drawer);
         },
 
-        setupResizeHandles() {
-            const rh = this.drawerEl.querySelector("#resize-handle-right");
-            const bh = this.drawerEl.querySelector("#resize-handle-bottom");
+        setupResizeHandles(drawer) {
+            const rh = drawer.querySelector("#resize-right");
+            const bh = drawer.querySelector("#resize-bottom");
+            let resizingR = false, resizingB = false;
 
-            let resizingRight = false;
-            let resizingBottom = false;
+            rh.addEventListener("mousedown", () => resizingR = true);
+            bh.addEventListener("mousedown", () => resizingB = true);
 
-            rh.addEventListener("mousedown", () => resizingRight = true);
-            bh.addEventListener("mousedown", () => resizingBottom = true);
-
-            window.addEventListener("mousemove", (e) => {
-                if (resizingRight) {
-                    const newW = this.drawerSide === "left"
-                        ? e.clientX
-                        : window.innerWidth - e.clientX;
-                    this.drawerWidth = Math.max(250, newW);
-                    this.drawerEl.style.width = this.drawerWidth + "px";
+            window.addEventListener("mousemove", e => {
+                if (resizingR) {
+                    drawer.style.width = e.clientX + "px";
                 }
-                if (resizingBottom) {
-                    const newH = e.clientY;
-                    this.drawerHeight = Math.max(300, newH);
-                    this.drawerEl.style.height = this.drawerHeight + "px";
+                if (resizingB) {
+                    drawer.style.height = e.clientY + "px";
                 }
             });
 
             window.addEventListener("mouseup", () => {
-                resizingRight = false;
-                resizingBottom = false;
+                resizingR = false;
+                resizingB = false;
             });
         },
 
-        // =========================
-        // TABS
-        // =========================
+        /* --------------------------
+           TABS
+        --------------------------- */
         buildTabs() {
-            const tabBar = this.drawerEl.querySelector("#drawer-tabs");
-            const content = this.drawerEl.querySelector("#tab-content");
-
-            this.elements = {
-                tabButtons: {},
-                tabPanels: {}
+            this.tabs = {
+                order: ["overview", "targets", "faction", "war", "chain", "ai", "settings"],
+                labels: {
+                    overview: "Overview",
+                    targets: "Targets",
+                    faction: "Faction",
+                    war: "War",
+                    chain: "Chain",
+                    ai: "AI",
+                    settings: "Settings"
+                },
+                buttons: {},
+                panels: {}
             };
 
-            const tabs = [
-                ["overview", "Overview"],
-                ["targets", "Targets"],
-                ["faction", "Faction"],
-                ["war", "War"],
-                ["chain", "Chain"],
-                ["ai", "AI"],
-                ["settings", "Settings"]
-            ];
+            const tabBar = this.drawer.querySelector("#drawer-tabs");
+            const tabContent = this.drawer.querySelector("#tab-content");
 
-            tabs.forEach(([id, label]) => {
+            this.tabs.order.forEach(id => {
                 const btn = document.createElement("div");
                 btn.className = "tab-btn";
-                btn.textContent = label;
                 btn.dataset.tab = id;
+                btn.textContent = this.tabs.labels[id];
+                tabBar.appendChild(btn);
+                this.tabs.buttons[id] = btn;
 
                 const panel = document.createElement("div");
                 panel.className = "tab-panel";
                 panel.dataset.tab = id;
-
-                tabBar.appendChild(btn);
-                content.appendChild(panel);
-
-                this.elements.tabButtons[id] = btn;
-                this.elements.tabPanels[id] = panel;
+                tabContent.appendChild(panel);
+                this.tabs.panels[id] = panel;
 
                 btn.addEventListener("click", () => this.switchTab(id));
             });
@@ -438,68 +238,67 @@
         },
 
         switchTab(id) {
-            Object.keys(this.elements.tabPanels).forEach(key => {
-                const p = this.elements.tabPanels[key];
-                const b = this.elements.tabButtons[key];
-                p.style.display = (key === id ? "block" : "none");
-                b.classList.toggle("active", key === id);
+            Object.keys(this.tabs.panels).forEach(key => {
+                const p = this.tabs.panels[key];
+                const b = this.tabs.buttons[key];
+                const active = key === id;
+                p.style.display = active ? "block" : "none";
+                b.classList.toggle("active", active);
             });
         },
 
-        // =========================
-        // REGISTER PANELS
-        // =========================
-        registerTabPanels() {
-            this.buildOverviewPanel();
-            this.buildTargetsPanel();
-            this.buildFactionPanel();
-            this.buildWarPanel();
-            this.buildChainPanel();
-            this.buildAIPanel();
-            this.buildSettingsPanel();
+        /* --------------------------
+           PANELS (build all content)
+        --------------------------- */
+        buildAllPanels() {
+            this.buildOverview();
+            this.buildTargets();
+            this.buildFaction();
+            this.buildWar();
+            this.buildChain();
+            this.buildAI();
+            this.buildSettings();
         },
 
-        // =========================
-        // PANEL — OVERVIEW
-        // =========================
-        buildOverviewPanel() {
-            const p = this.elements.tabPanels.overview;
-
+        /* --------------------------
+           OVERVIEW PANEL
+        --------------------------- */
+        buildOverview() {
+            const p = this.tabs.panels.overview;
             p.innerHTML = `
-                <div class="card">
-                    <div class="card-title">Commander Status</div>
-                    <div class="dash-row"><span>Energy</span><span id="ov-energy">0</span></div>
-                    <div class="dash-row"><span>Nerve</span><span id="ov-nerve">0</span></div>
-                    <div class="dash-row"><span>Life</span><span id="ov-life">0</span></div>
-                    <div class="dash-row"><span>Status</span><span id="ov-status">Unknown</span></div>
-                    <div class="dash-row"><span>Cooldown</span><span id="ov-cd">0s</span></div>
-                </div>
+            <div class="card">
+                <div class="card-title">Commander Status</div>
+                <div class="dash-row"><span>Energy</span><span id="ov-energy">0</span></div>
+                <div class="dash-row"><span>Nerve</span><span id="ov-nerve">0</span></div>
+                <div class="dash-row"><span>Life</span><span id="ov-life">0</span></div>
+                <div class="dash-row"><span>Status</span><span id="ov-status">Unknown</span></div>
+                <div class="dash-row"><span>Cooldown</span><span id="ov-cd">0s</span></div>
+            </div>
 
-                <div class="card">
-                    <div class="card-title">Faction Summary</div>
-                    <div class="dash-row"><span>Online</span><span id="ov-f-on">0</span></div>
-                    <div class="dash-row"><span>Watchers</span><span id="ov-f-watch">0</span></div>
-                    <div class="dash-row"><span>Hospital</span><span id="ov-f-hosp">0</span></div>
-                    <div class="dash-row"><span>Jail</span><span id="ov-f-jail">0</span></div>
-                </div>
+            <div class="card">
+                <div class="card-title">Faction Summary</div>
+                <div class="dash-row"><span>Online</span><span id="ov-f-on">0</span></div>
+                <div class="dash-row"><span>Watchers</span><span id="ov-f-watch">0</span></div>
+                <div class="dash-row"><span>Hospital</span><span id="ov-f-hosp">0</span></div>
+                <div class="dash-row"><span>Jail</span><span id="ov-f-jail">0</span></div>
+            </div>
 
-                <div class="card">
-                    <div class="card-title">War Summary</div>
-                    <div class="dash-row"><span>Enemy Online</span><span id="ov-w-on">0</span></div>
-                    <div class="dash-row"><span>Threat</span><span id="ov-w-threat">0</span></div>
-                    <div class="dash-row"><span>Danger</span><span id="ov-w-danger">Low</span></div>
-                </div>
+            <div class="card">
+                <div class="card-title">War Summary</div>
+                <div class="dash-row"><span>Enemy Online</span><span id="ov-w-on">0</span></div>
+                <div class="dash-row"><span>Threat</span><span id="ov-w-threat">0</span></div>
+                <div class="dash-row"><span>Danger</span><span id="ov-w-danger">Low</span></div>
+            </div>
 
-                <div class="card">
-                    <div class="card-title">Chain Summary</div>
-                    <div class="dash-row"><span>Hits</span><span id="ov-c-hits">0</span></div>
-                    <div class="dash-row"><span>Time Left</span><span id="ov-c-time">0s</span></div>
-                    <div class="dash-row"><span>Pace</span><span id="ov-c-pace">0/min</span></div>
-                    <div class="dash-row"><span>Risk</span><span id="ov-c-risk">Unknown</span></div>
-                </div>
+            <div class="card">
+                <div class="card-title">Chain Summary</div>
+                <div class="dash-row"><span>Hits</span><span id="ov-c-hits">0</span></div>
+                <div class="dash-row"><span>Time Left</span><span id="ov-c-time">0s</span></div>
+                <div class="dash-row"><span>Pace</span><span id="ov-c-pace">0/min</span></div>
+                <div class="dash-row"><span>Risk</span><span id="ov-c-risk">Unknown</span></div>
+            </div>
             `;
 
-            // Save references for fast updates
             this.ov = {
                 energy: p.querySelector("#ov-energy"),
                 nerve: p.querySelector("#ov-nerve"),
@@ -519,19 +318,19 @@
                 c_hits: p.querySelector("#ov-c-hits"),
                 c_time: p.querySelector("#ov-c-time"),
                 c_pace: p.querySelector("#ov-c-pace"),
-                c_risk: p.querySelector("#ov-c-risk")
+                c_risk: p.querySelector("#ov-c-risk"),
             };
         },
 
-        // =========================
-        // PANEL — TARGETS
-        // =========================
-        buildTargetsPanel() {
-            const p = this.elements.tabPanels.targets;
+        /* --------------------------
+           TARGETS PANEL
+        --------------------------- */
+        buildTargets() {
+            const p = this.tabs.panels.targets;
             p.innerHTML = `
                 <div class="card">
                     <div class="card-title">Targets</div>
-                    <table id="targets-table">
+                    <table id="t-table">
                         <thead>
                             <tr>
                                 <th>On</th>
@@ -540,26 +339,25 @@
                                 <th>Status</th>
                                 <th>Timer</th>
                                 <th>Score</th>
-                                <th>Action</th>
+                                <th>Act</th>
                             </tr>
                         </thead>
                         <tbody></tbody>
                     </table>
                 </div>
             `;
-            this.targetsTable = p.querySelector("#targets-table tbody");
+            this.tBody = p.querySelector("#t-table tbody");
         },
 
-        // =========================
-        // PANEL — FACTION
-        // =========================
-        buildFactionPanel() {
-            const p = this.elements.tabPanels.faction;
-
+        /* --------------------------
+           FACTION PANEL
+        --------------------------- */
+        buildFaction() {
+            const p = this.tabs.panels.faction;
             p.innerHTML = `
                 <div class="card">
                     <div class="card-title">Faction Roster</div>
-                    <table id="faction-table">
+                    <table id="f-table">
                         <thead>
                             <tr>
                                 <th>On</th>
@@ -567,26 +365,24 @@
                                 <th>Lv</th>
                                 <th>Status</th>
                                 <th>Timer</th>
-                                <th>Watcher</th>
+                                <th>Watch</th>
                             </tr>
                         </thead>
                         <tbody></tbody>
                     </table>
                 </div>
             `;
-
-            this.factionTable = p.querySelector("#faction-table tbody");
+            this.fBody = p.querySelector("#f-table tbody");
         },
 
-        // =========================
-        // PANEL — WAR
-        // =========================
-        buildWarPanel() {
-            const p = this.elements.tabPanels.war;
-
+        /* --------------------------
+           WAR PANEL
+        --------------------------- */
+        buildWar() {
+            const p = this.tabs.panels.war;
             p.innerHTML = `
                 <div class="card">
-                    <div class="card-title">Enemy Faction Status</div>
+                    <div class="card-title">Enemy Faction</div>
                     <div class="dash-row"><span>Online</span><span id="war-on">0</span></div>
                     <div class="dash-row"><span>Hospital</span><span id="war-hosp">0</span></div>
                     <div class="dash-row"><span>Jail</span><span id="war-jail">0</span></div>
@@ -597,7 +393,7 @@
 
                 <div class="card">
                     <div class="card-title">High Value Targets</div>
-                    <table id="war-targets">
+                    <table id="war-table">
                         <thead>
                             <tr>
                                 <th>Score</th>
@@ -605,7 +401,7 @@
                                 <th>Lv</th>
                                 <th>Status</th>
                                 <th>Timer</th>
-                                <th>Action</th>
+                                <th>Act</th>
                             </tr>
                         </thead>
                         <tbody></tbody>
@@ -613,259 +409,434 @@
                 </div>
             `;
 
-            this.warEls = {
+            this.wEls = {
                 on: p.querySelector("#war-on"),
                 hosp: p.querySelector("#war-hosp"),
                 jail: p.querySelector("#war-jail"),
                 travel: p.querySelector("#war-travel"),
                 threat: p.querySelector("#war-threat"),
                 danger: p.querySelector("#war-danger"),
-                table: p.querySelector("#war-targets tbody")
+                tbody: p.querySelector("#war-table tbody"),
             };
         },
 
-        // =========================
-        // PANEL — CHAIN
-        // =========================
-        buildChainPanel() {
-            const p = this.elements.tabPanels.chain;
+        /* --------------------------
+           CHAIN PANEL
+        --------------------------- */
+        buildChain() {
+            const p = this.tabs.panels.chain;
 
             p.innerHTML = `
                 <div class="card">
                     <div class="card-title">Chain Status</div>
-                    <div class="dash-row"><span>Hits</span><span id="chain-hits">0</span></div>
-                    <div class="dash-row"><span>Time Left</span><span id="chain-time">0s</span></div>
-                    <div class="dash-row"><span>Pace</span><span id="chain-pace">0/min</span></div>
-                    <div class="dash-row"><span>Risk</span><span id="chain-risk">Unknown</span></div>
+                    <div class="dash-row"><span>Hits</span><span id="ch-hits">0</span></div>
+                    <div class="dash-row"><span>Time Left</span><span id="ch-time">0s</span></div>
+                    <div class="dash-row"><span>Pace</span><span id="ch-pace">0/min</span></div>
+                    <div class="dash-row"><span>Risk</span><span id="ch-risk">Unknown</span></div>
                 </div>
 
-                <button id="chain-settings-btn" class="btn-sm">Chain Settings</button>
+                <button id="ch-set-btn" class="btn-sm">Chain Settings</button>
 
-                <div id="chain-settings-panel" style="display:none; margin-top:10px;" class="card">
+                <div id="ch-panel" class="card" style="display:none; margin-top:10px;">
                     <div class="card-title">Chain Configuration</div>
                     <div class="dash-row">
-                        <span>Drop Warning Threshold (seconds)</span>
-                        <input id="chain-threshold" type="number" style="width:80px;">
+                        <span>Drop Warning Threshold (secs)</span>
+                        <input id="ch-threshold" type="number" value="30" style="width:70px;">
                     </div>
-                    <button id="chain-save" class="btn-sm">Save</button>
+                    <button id="ch-save" class="btn-sm">Save</button>
                 </div>
             `;
 
-            const btn = p.querySelector("#chain-settings-btn");
-            const panel = p.querySelector("#chain-settings-panel");
+            const btn = p.querySelector("#ch-set-btn");
+            const panel = p.querySelector("#ch-panel");
 
             btn.addEventListener("click", () => {
                 panel.style.display = panel.style.display === "none" ? "block" : "none";
             });
 
-            this.chainEls = {
-                hits: p.querySelector("#chain-hits"),
-                time: p.querySelector("#chain-time"),
-                pace: p.querySelector("#chain-pace"),
-                risk: p.querySelector("#chain-risk")
+            this.chEls = {
+                hits: p.querySelector("#ch-hits"),
+                time: p.querySelector("#ch-time"),
+                pace: p.querySelector("#ch-pace"),
+                risk: p.querySelector("#ch-risk"),
+                thresholdInput: p.querySelector("#ch-threshold")
             };
+
+            p.querySelector("#ch-save").addEventListener("click", () => {
+                alert("Chain settings saved.");
+            });
         },
 
-        // =========================
-        // PANEL — AI
-        // =========================
-        buildAIPanel() {
-            const p = this.elements.tabPanels.ai;
-
+        /* --------------------------
+           AI PANEL
+        --------------------------- */
+        buildAI() {
+            const p = this.tabs.panels.ai;
             p.innerHTML = `
                 <div class="card">
-                    <div class="card-title">AI Command Interface</div>
-                    <p>Future integration point for Commander AI panels.</p>
+                    <div class="card-title">AI Interface</div>
+                    <p>The Warrant Officer AI will be added here.</p>
                 </div>
             `;
         },
 
-        // =========================
-        // PANEL — SETTINGS
-        // =========================
-        buildSettingsPanel() {
-            const p = this.elements.tabPanels.settings;
+        /* --------------------------
+           SETTINGS PANEL
+        --------------------------- */
+        buildSettings() {
+            const p = this.tabs.panels.settings;
 
             p.innerHTML = `
                 <div class="card">
                     <div class="card-title">Drawer Settings</div>
                     <div class="dash-row">
-                        <span>Drawer Side</span>
-                        <select id="set-drawer-side">
+                        <span>Side</span>
+                        <select id="set-side">
                             <option value="left">Left</option>
                             <option value="right">Right</option>
                         </select>
                     </div>
                 </div>
-
-                <div class="card">
-                    <div class="card-title">API Configuration</div>
-                    <div class="dash-row">
-                        <span>Your API Key</span>
-                        <input id="set-api-key" type="password" placeholder="API Key" style="width:170px;">
-                    </div>
-                    <button id="set-save-api" class="btn-sm">Save</button>
-                </div>
             `;
 
-            const side = p.querySelector("#set-drawer-side");
+            const side = p.querySelector("#set-side");
             side.value = this.settings.drawerSide;
 
             side.addEventListener("change", () => {
                 this.settings.drawerSide = side.value;
                 this.saveSettings();
-                this.drawerSide = side.value;
-                this.rebuildDrawer();
-            });
-
-            p.querySelector("#set-save-api").addEventListener("click", () => {
-                const key = p.querySelector("#set-api-key").value.trim();
-                this.settings.apiKey = key;
-                this.saveSettings();
-
-                try {
-                    if (this.general.intel && this.general.intel.setCredentials) {
-                        this.general.intel.setCredentials(key);
-                    }
-                } catch(e){}
+                this.redrawDrawerSide();
             });
         },
 
-        rebuildDrawer() {
-            // Close then recreate side
-            this.drawerEl.remove();
-            this.createDrawer();
-            this.buildTabs();
-            this.registerTabPanels();
+        redrawDrawerSide() {
+            if (!this.drawer) return;
+            this.drawer.classList.remove("left", "right");
+            this.drawer.classList.add(this.settings.drawerSide);
         },
 
-        // =========================
-        // LISTENERS
-        // =========================
-        registerGeneralListeners() {
+        /* --------------------------
+           SIGNAL LISTENERS
+        --------------------------- */
+        wireGeneralSignals() {
             const G = this.general;
 
-            // Utility to wrap listeners + allow unsubscribe
-            const listen = (ev, fn) => {
-                G.signals.listen(ev, fn);
-                // No native unsubscribe in your bus — so we wrap manually
-                const unsub = () => {
-                    const arr = G.signals._internal?.[ev];
-                    if (!arr) return;
-                    const idx = arr.indexOf(fn);
-                    if (idx >= 0) arr.splice(idx, 1);
-                };
-                this.listeners.push(unsub);
-            };
-
             // USER SITREP
-            listen("USER_SITREP", data => {
-                this.ov.energy.textContent = data.energy ?? 0;
-                this.ov.nerve.textContent = data.nerve ?? 0;
-                this.ov.life.textContent = data.life ?? 0;
-                this.ov.status.textContent = data.status ?? "Unknown";
-                this.ov.cd.textContent = this.formatMs((data.cooldown || 0) * 1000);
-            });
+            this.listeners.push(G.signals.listen("USER_SITREP", data => {
+                this.ov.energy.textContent = data.energy;
+                this.ov.nerve.textContent = data.nerve;
+                this.ov.life.textContent = data.life;
+                this.ov.status.textContent = data.status;
+                this.ov.cd.textContent = this.formatMs(data.cooldown * 1000);
+            }));
 
-            // FACTION SITREP
-            listen("FACTION_SITREP", data => {
-                this.ov.f_on.textContent = data.online ?? 0;
-                this.ov.f_watch.textContent = data.watchers ?? 0;
-                this.ov.f_hosp.textContent = data.hospital ?? 0;
-                this.ov.f_jail.textContent = data.jail ?? 0;
-            });
+            // FACTION
+            this.listeners.push(G.signals.listen("FACTION_SITREP", data => {
+                this.ov.f_on.textContent = data.online;
+                this.ov.f_watch.textContent = data.watchers;
+                this.ov.f_hosp.textContent = data.hospital;
+                this.ov.f_jail.textContent = data.jail;
 
-            // CHAIN SITREP
-            listen("CHAIN_SITREP", data => {
-                this.ov.c_hits.textContent = data.hits ?? 0;
-                this.ov.c_time.textContent = this.formatMs((data.timeLeft || 0) * 1000);
-                this.ov.c_pace.textContent = `${data.currentPace || 0}/min`;
-                this.ov.c_risk.textContent = data.dropRisk || "Unknown";
+                this.updateFactionTable(data);
+            }));
 
-                this.chainEls.hits.textContent = data.hits ?? 0;
-                this.chainEls.time.textContent = this.formatMs((data.timeLeft || 0) * 1000);
-                this.chainEls.pace.textContent = `${data.currentPace || 0}/min`;
-                this.chainEls.risk.textContent = data.dropRisk || "Unknown";
-            });
+            // CHAIN
+            this.listeners.push(G.signals.listen("CHAIN_SITREP", data => {
+                this.ov.c_hits.textContent = data.hits;
+                this.ov.c_time.textContent = this.formatMs(data.timeLeft * 1000);
+                this.ov.c_pace.textContent = `${data.currentPace}/min`;
+                this.ov.c_risk.textContent = data.dropRisk;
+
+                this.chEls.hits.textContent = data.hits;
+                this.chEls.time.textContent = this.formatMs(data.timeLeft * 1000);
+                this.chEls.pace.textContent = `${data.currentPace}/min`;
+                this.chEls.risk.textContent = data.dropRisk;
+            }));
 
             // WAR SITREP
-            listen("WAR_SITREP", data => {
-                this.ov.w_on.textContent = data.enemyOnline ?? 0;
-                this.ov.w_threat.textContent = data.threat ?? 0;
-                this.ov.w_danger.textContent = data.danger ?? "Low";
+            this.listeners.push(G.signals.listen("WAR_SITREP", data => {
+                this.ov.w_on.textContent = data.enemyOnline;
+                this.ov.w_threat.textContent = data.threat;
+                this.ov.w_danger.textContent = data.danger;
 
-                this.warEls.on.textContent = data.enemyOnline ?? 0;
-                this.warEls.hosp.textContent = data.enemyHospital ?? 0;
-                this.warEls.jail.textContent = data.enemyJail ?? 0;
-                this.warEls.travel.textContent = data.enemyTravel ?? 0;
-                this.warEls.threat.textContent = data.threat ?? 0;
-                this.warEls.danger.textContent = data.danger ?? "Low";
+                this.wEls.on.textContent = data.enemyOnline;
+                this.wEls.hosp.textContent = data.enemyHospital;
+                this.wEls.jail.textContent = data.enemyJail;
+                this.wEls.travel.textContent = data.enemyTravel;
+                this.wEls.threat.textContent = data.threat;
+                this.wEls.danger.textContent = data.danger;
 
-                if (data.targets) {
-                    const ids = data.targets.map(t => t.id).join(",");
-                    if (this.scoreHash !== ids) {
-                        this.scoreHash = ids;
-                        this.requestScores(data.targets);
-                    }
-                    this.warTargets = data.targets;
-                    this.renderWarTargets();
+                const ids = data.targets.map(t => t.id).join(",");
+                if (ids !== this.scoreHash) {
+                    this.scoreHash = ids;
+                    this.general.signals.dispatch("REQUEST_TARGET_SCORES", { targets: data.targets });
                 }
-            });
 
-            // TARGET SCORES
-            listen("TARGET_SCORES_READY", ({ scored }) => {
-                scored.forEach(t => {
-                    const tgt = this.warTargets.find(x => String(x.id) === String(t.id));
-                    if (tgt) tgt.score = t.colonelScore;
+                this.warTargets = data.targets;
+                this.renderWarTargets();
+            }));
+
+            // SCORES
+            this.listeners.push(G.signals.listen("TARGET_SCORES_READY", ({ scored }) => {
+                scored.forEach(s => {
+                    const tgt = this.warTargets.find(x => String(x.id) === String(s.id));
+                    if (tgt) tgt.colonelScore = s.colonelScore;
                 });
                 this.renderWarTargets();
-            });
+            }));
         },
 
-        // =========================
-        // SCORING
-        // =========================
-        requestScores(list) {
-            if (!list || !list.length) return;
-            this.general.signals.dispatch("REQUEST_TARGET_SCORES", { targets: list });
-        },
-
-        // =========================
-        // RENDER FUNCTIONS
-        // =========================
+        /* --------------------------
+           RENDER HELPERS
+        --------------------------- */
         formatMs(ms) {
-            const t = Number(ms);
-            if (isNaN(t) || t <= 0) return "0s";
-            const s = Math.floor(t / 1000);
+            const n = Number(ms);
+            if (isNaN(n) || n <= 0) return "0s";
+            const s = Math.floor(n / 1000);
             const m = Math.floor(s / 60);
             const ss = s % 60;
             return m > 0 ? `${m}m ${ss}s` : `${ss}s`;
         },
 
-        renderWarTargets() {
-            const tbody = this.warEls.table;
+        /* --------------------------
+           FACTION TABLE RENDER
+        --------------------------- */
+        updateFactionTable(data) {
+            const tbody = this.fBody;
             tbody.innerHTML = "";
 
-            const list = [...this.warTargets].sort((a, b) => (b.score || 0) - (a.score || 0));
+            const now = Date.now();
+
+            const mem = this.general.factionMembers || data.members || {};
+            Object.values(mem).forEach(m => {
+                const row = document.createElement("tr");
+                const online = (now - (m.lastSeen || 0)) < 600000;
+
+                row.innerHTML = `
+                    <td>${online ? "●" : "○"}</td>
+                    <td>${m.name}</td>
+                    <td>${m.level}</td>
+                    <td>${m.status || "Okay"}</td>
+                    <td>${this.formatMs((m.until || 0) - now)}</td>
+                    <td>${m.watching ? "👁️" : "-"}</td>
+                `;
+
+                tbody.appendChild(row);
+            });
+        },
+
+        /* --------------------------
+           WAR TARGETS RENDER
+        --------------------------- */
+        renderWarTargets() {
+            const tbody = this.wEls.tbody;
+            tbody.innerHTML = "";
+
+            const list = [...this.warTargets].sort((a,b)=> (b.colonelScore || 0) - (a.colonelScore || 0));
 
             list.forEach(t => {
-                const tr = document.createElement("tr");
-                tr.innerHTML = `
-                    <td>${t.score || 0}</td>
+                const row = document.createElement("tr");
+                row.innerHTML = `
+                    <td>${t.colonelScore || 0}</td>
                     <td>${t.name}</td>
-                    <td>${t.level || ""}</td>
-                    <td>${t.status || "Okay"}</td>
+                    <td>${t.level}</td>
+                    <td>${t.status}</td>
                     <td>${this.formatMs(t.timer)}</td>
-                    <td><button class="btn-sm" data-id="${t.id}" data-act="attack">Attack</button></td>
+                    <td><button class="btn-sm" data-id="${t.id}" data-act="attack">Go</button></td>
                 `;
-                tbody.appendChild(tr);
+                tbody.appendChild(row);
             });
+        },
+
+        /* --------------------------
+           STYLES (POLISHED)
+        --------------------------- */
+        injectStyles() {
+            const s = document.createElement("style");
+            s.textContent = `
+                :host {
+                    all: initial;
+                    font-family: Arial, sans-serif;
+                }
+
+                /* Toggle Button */
+                #war-toggle-btn {
+                    position: fixed;
+                    width: 48px;
+                    height: 48px;
+                    border-radius: 50%;
+                    background: #18191d;
+                    border: 1px solid #333;
+                    color: #ccc;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    cursor: grab;
+                    z-index: 9999999;
+                    box-shadow: 0 0 8px rgba(0,0,0,0.6);
+                    user-select: none;
+                }
+
+                #war-toggle-btn:active {
+                    cursor: grabbing;
+                }
+
+                /* Drawer */
+                #drawer {
+                    position: fixed;
+                    top: 0;
+                    width: 380px;
+                    height: 92vh;
+                    background: #1b1d22;
+                    border: 1px solid #222;
+                    display: flex;
+                    flex-direction: column;
+                    transform: translateX(-100%);
+                    transition: transform 0.25s ease;
+                    z-index: 10000000;
+                }
+
+                #drawer.right {
+                    right: 0;
+                    transform: translateX(100%);
+                }
+
+                #drawer.open.left {
+                    transform: translateX(0);
+                }
+
+                #drawer.open.right {
+                    transform: translateX(0);
+                }
+
+                #drawer-header {
+                    padding: 12px 14px;
+                    background: #23252b;
+                    border-bottom: 1px solid #2f3138;
+                    font-size: 14px;
+                    font-weight: bold;
+                }
+
+                /* Resize */
+                #resize-right {
+                    position: absolute;
+                    right: 0;
+                    top: 0;
+                    width: 6px;
+                    height: 100%;
+                    cursor: ew-resize;
+                }
+                #resize-bottom {
+                    position: absolute;
+                    bottom: 0;
+                    left: 0;
+                    width: 100%;
+                    height: 6px;
+                    cursor: ns-resize;
+                }
+
+                /* Tabs */
+                #drawer-tabs {
+                    display: flex;
+                    background: #15161a;
+                    border-bottom: 1px solid #2f3138;
+                }
+                .tab-btn {
+                    flex: 1;
+                    padding: 8px;
+                    text-align: center;
+                    cursor: pointer;
+                    color: #aaa;
+                    font-size: 12px;
+                    user-select: none;
+                }
+                .tab-btn.active {
+                    color: #fff;
+                    background: #292b31;
+                    font-weight: bold;
+                }
+
+                #tab-content {
+                    flex: 1;
+                    overflow-y: auto;
+                    padding: 10px;
+                }
+
+                /* Cards */
+                .card {
+                    background: #23252b;
+                    border: 1px solid #303036;
+                    padding: 10px;
+                    border-radius: 4px;
+                    margin-bottom: 14px;
+                    color: #eee;
+                }
+
+                .card-title {
+                    font-size: 14px;
+                    margin-bottom: 8px;
+                    font-weight: 600;
+                }
+
+                .dash-row {
+                    display: flex;
+                    justify-content: space-between;
+                    font-size: 12px;
+                    padding: 3px 0;
+                }
+
+                .btn-sm {
+                    font-size: 11px;
+                    padding: 3px 6px;
+                    background: #2d2f34;
+                    border: 1px solid #3a3d45;
+                    color: #ddd;
+                    border-radius: 4px;
+                    cursor: pointer;
+                }
+
+                .btn-sm:hover {
+                    background: #3e4047;
+                }
+
+                table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    color: #ccc;
+                }
+                th {
+                    font-size: 12px;
+                    color: #bbb;
+                    text-align: left;
+                    padding: 5px 4px;
+                    border-bottom: 1px solid #383a40;
+                }
+                td {
+                    font-size: 12px;
+                    padding: 6px 4px;
+                    border-bottom: 1px solid #31333a;
+                }
+
+                tr:hover {
+                    background: rgba(255,255,255,0.05);
+                }
+
+                /* Scrollbar */
+                #tab-content::-webkit-scrollbar {
+                    width: 8px;
+                }
+                #tab-content::-webkit-scrollbar-thumb {
+                    background: #333;
+                    border-radius: 4px;
+                }
+            `;
+            this.root.appendChild(s);
         }
     };
 
     if (window.WAR_GENERAL) {
         WAR_GENERAL.register("Major", Major);
     } else {
-        console.warn("[MAJOR v3.2] WAR_GENERAL not detected.");
+        console.warn("[MAJOR v3.2.1] WAR_GENERAL missing");
     }
 })();
