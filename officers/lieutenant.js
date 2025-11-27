@@ -1,12 +1,12 @@
-/**
+/***************************************************
  * WAR_LIEUTENANT v2.2 (Final Deployment Build)
  * Role: Reconnaissance Officer
  * Responsibilities:
  *    • Poll Torn API (via General)
  *    • Deliver RAW_INTEL
  *    • Adaptive polling (peace / chain / panic)
- *    • Re-init safe
- */
+ *    • Persistent chain memory
+ ***************************************************/
 
 (function() {
 
@@ -55,9 +55,7 @@
 
         startPolling() {
             const id = setInterval(() => {
-                // only poll with valid API key
                 if (!this.general.intel.hasCredentials()) return;
-
                 this.poll();
             }, 1000);
 
@@ -74,32 +72,30 @@
 
             this.general.intel.request({
                 normalize: true,
-                selections: ["basic","bars","chain","faction"]
+                selections: ["basic","bars","chain","faction","profile"]
             }).then(intel => {
                 this.general.signals.dispatch("RAW_INTEL", intel);
             }).catch(()=>{});
         },
 
         pollRate() {
-            if (this.memory.timeLeft < 50 && this.memory.active) return 1;       // panic
-            if (this.memory.active) return 3;                                    // chain
-            return 15;                                                           // peace
+            if (this.memory.timeLeft < 50 && this.memory.active) return 1;  
+            if (this.memory.active) return 3;       
+            return 15;                                
         },
 
         ingest(intel) {
             if (!intel || !intel.chain) return;
-            const c = intel.chain;
 
+            const c = intel.chain;
             this.memory.active = c.current > 0;
             this.memory.hits = c.current;
             this.memory.timeLeft = c.timeout;
             this.memory.lastUpdate = Date.now();
 
-            // pace history
             if (!this.memory.paceHistory) this.memory.paceHistory = [];
             this.memory.paceHistory.push({time: Date.now(), hits: 1});
 
-            // clean history
             const cutoff = Date.now() - 60000;
             this.memory.paceHistory = this.memory.paceHistory.filter(p => p.time > cutoff);
 
@@ -114,8 +110,9 @@
         },
 
         saveMemory() {
-            try { localStorage.setItem(this.memoryKey, JSON.stringify(this.memory)); }
-            catch {}
+            try { 
+                localStorage.setItem(this.memoryKey, JSON.stringify(this.memory)); 
+            } catch {}
         }
     };
 
