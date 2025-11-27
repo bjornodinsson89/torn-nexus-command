@@ -94,6 +94,7 @@
 
         /* --- INITIALIZATION SEQUENCE --- */
         init(General) {
+            if (!General) throw new Error('General required');
             this.general = General;
 
             this.openDB()
@@ -138,7 +139,10 @@
                     resolve();
                 };
 
-                req.onerror = () => reject(req.error);
+                req.onerror = () => {
+                    this.warn('DB open failed:', req.error);
+                    reject(req.error);
+                };
             });
         },
 
@@ -149,7 +153,10 @@
                     const tx = this.db.transaction(store, "readwrite");
                     tx.objectStore(store).put(data);
                     tx.oncomplete = () => resolve(true);
-                    tx.onerror = () => reject(tx.error);
+                    tx.onerror = () => {
+                        this.warn(`DB write failed for store ${store}:`, tx.error);
+                        reject(tx.error);
+                    };
                 } catch (e) {
                     reject(e);
                 }
@@ -162,7 +169,10 @@
                     const tx = this.db.transaction(store, "readonly");
                     const req = tx.objectStore(store).get(key);
                     req.onsuccess = () => resolve(req.result || null);
-                    req.onerror = () => reject(req.error);
+                    req.onerror = () => {
+                        this.warn(`DB read failed for store ${store}:`, tx.error);
+                        reject(tx.error);
+                    };
                 } catch (e) {
                     reject(e);
                 }
@@ -175,7 +185,10 @@
                     const tx = this.db.transaction(store, "readonly");
                     const req = tx.objectStore(store).getAll();
                     req.onsuccess = () => resolve(req.result || []);
-                    req.onerror = () => reject(req.error);
+                    req.onerror = () => {
+                        this.warn(`DB readAll failed for store ${store}:`, tx.error);
+                        reject(tx.error);
+                    };
                 } catch (e) {
                     reject(e);
                 }
@@ -188,7 +201,10 @@
                     const tx = this.db.transaction(store, "readwrite");
                     tx.objectStore(store).delete(key);
                     tx.oncomplete = () => resolve(true);
-                    tx.onerror = () => reject(tx.error);
+                    tx.onerror = () => {
+                        this.warn(`DB delete failed for store ${store}:`, tx.error);
+                        reject(tx.error);
+                    };
                 } catch (e) {
                     reject(e);
                 }
@@ -197,7 +213,10 @@
 
         /* --- UTILITIES --- */
         now() { return Date.now(); },
-        clamp(v, min, max) { return Math.min(max, Math.max(min, v)); },
+        clamp(v, min, max) {
+            v = isNaN(v) ? min : v;
+            return Math.min(max, Math.max(min, v));
+        },
         smooth(a, b, t) { return (1 - t) * a + t * b; },
 
         warn(...msg) { console.warn("%c[COLONEL WARN]", "color:#F90", ...msg); },
@@ -281,7 +300,13 @@
 
     Colonel.computeTrend = function (values, window = 5) {
         if (!Array.isArray(values) || values.length < 2) return "stable";
-        const recent = values.slice(-window);
+        let recent;
+        if (values.length && typeof values[0] === 'object' && 'value' in values[0]) {
+            const decayed = this.exponentialDecayArray(values.slice(-window * 2));
+            recent = decayed;
+        } else {
+            recent = values.slice(-window);
+        }
         const first = recent[0];
         const last = recent[recent.length - 1];
         if (last > first * 1.15) return "rising";
@@ -292,7 +317,11 @@
     Colonel.exponentialDecayArray = function (arr, halfLifeHours = 12) {
         const now = this.now();
         const halfLife = halfLifeHours * 3600 * 1000;
-        return arr.map(v => v * Math.pow(0.5, (now - v.timestamp) / halfLife));
+        return arr.map(v => {
+            const val = typeof v === 'object' ? (v.value || 0) : v;
+            const ts = typeof v === 'object' ? (v.timestamp || now) : now;
+            return val * Math.pow(0.5, (now - ts) / halfLife);
+        });
     };
 
     /* =======================================================
@@ -347,13 +376,15 @@
         const record = { value: event.value || 1, type: event.type || "attack", timestamp: now };
 
         player.aggressionHistory.push(record);
+        player.aggressionHistory = player.aggressionHistory.filter(h => (now - h.timestamp) < (7 * 24 * 3600000));
         if (player.aggressionHistory.length > 100) player.aggressionHistory.shift();
 
         const values = player.aggressionHistory.map(e => e.value);
         const sum = values.reduce((a, b) => a + b, 0);
         const avg = values.length ? sum / values.length : 0;
 
-        const posterior = (avg * 0.7) + 0.15; // 0.15 prior
+        const prior = 0.15;
+        const posterior = (avg * 0.7) + prior;
         player.aggressionScore = this.clamp(posterior, 0, 1);
         player.lastUpdate = now;
 
@@ -382,7 +413,7 @@
         const timeSince = (this.now() - lastSeen) / 60000;
         const activityFactor = timeSince < 15 ? 1 : timeSince < 60 ? 0.6 : 0.3;
 
-        const prior = 0.2;
+        const prior = 0.15;
         const evidence = (A * 0.6) + (recentAttacks * 0.04);
         const posterior = (evidence * activityFactor) + prior;
 
@@ -390,10 +421,10 @@
 
         p.threatLevel = threat;
         p.threatHistory = p.threatHistory || [];
-        p.threatHistory.push(threat);
+        p.threatHistory.push({ value: threat, timestamp: this.now() });
         if (p.threatHistory.length > 30) p.threatHistory.shift();
 
-        p.threatTrend = this.computeTrend(p.threatHistory.map(x => x));
+        p.threatTrend = this.computeTrend(p.threatHistory);
         p.lastUpdate = this.now();
 
         await this.write("players", p);
@@ -571,10 +602,10 @@
         if (f.hostilityHistory.length > 50) f.hostilityHistory.shift();
 
         const latest = f.hostilityHistory[f.hostilityHistory.length - 1].value;
-        const posterior = (latest * 0.7) + 0.2;
+        const posterior = (latest * 0.7) + 0.15;
 
         f.hostilityScore = this.clamp(posterior, 0, 1);
-        f.warTrend = this.computeTrend(f.hostilityHistory.map(h => h.value));
+        f.warTrend = this.computeTrend(f.hostilityHistory);
         f.lastUpdate = now;
 
         await this.write("factions", f);
