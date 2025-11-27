@@ -1,5 +1,5 @@
 /********************************************************************
- *  MAJOR v5.0 – FULL GUI OFFICER ( Base CARBON-TECH THEME)
+ *  MAJOR v5.0 – FULL GUI OFFICER (Base CARBON-TECH THEME)
  ********************************************************************/
 
 (function() {
