@@ -5,613 +5,1398 @@
  ********************************************************************/
 
 (function() {
+"use strict";
 
+/* ============================================================
+   SAFETY CHECK — ENSURE GENERAL EXISTS
+   ============================================================ */
+if (!window.WAR_GENERAL) {
+    console.warn("[MAJOR] WAR_GENERAL not detected — Major aborted.");
+    return;
+}
+
+/* ============================================================
+   CLASS MAJOR — Main UI / Drawer / Overlay Controller
+   ============================================================ */
 class Major {
 
     constructor() {
         this.general = null;
+
+        // Host & Shadow Root
         this.host = null;
         this.shadow = null;
 
-        // UI Refs
-        this.drawer = null;
-        this.toggleBtn = null;
-        this.tabs = {};
-        this.activeTab = "dashboard";
-        
-        // Throttling for resize
-        this.rafId = null;
+        // Drawer
+        this.drawerEl = null;
+        this.drawerOpen = false;
+        this.drawerSide = "left"; // setting
 
-        // Settings (Direct mapping to your GM values)
-        this.settings = {
-            side: GM_getValue("FWH_DRAWER_SIDE", "left"),
-            height: GM_getValue("FWH_DRAWER_HEIGHT", "55vh"),
-            width: GM_getValue("FWH_DRAWER_WIDTH", "260px"),
-            btnW: GM_getValue("FWH_BTN_WIDTH", 48),
-            btnH: GM_getValue("FWH_BTN_HEIGHT", 48)
-        };
+        // Toggle Button
+        this.buttonEl = null;
+        this.buttonPosition = { bottom: 20, left: 20 };
 
-        // Data Cache
-        this.cache = {
-            chain: { current: 0, max: 0, timeout: 0 },
-            faction: { members: {} },
-            war: { enemies: [], wall: {}, score: {} },
-            targets: []
+        // Drag Logic
+        this.dragging = false;
+        this._isDragging = false;
+        this.dragOffsetX = 0;
+        this.dragOffsetY = 0;
+
+        // Tabs & Panels
+        this.activeTab = "main";
+        this.targetSubTab = "personal";
+        this.tabsContainer = null;
+        this.panelsContainer = null;
+
+        // Inline Scanner
+        this.inlineScanner = null;
+
+        // Officer Ready / Sync
+        this.officerStatus = {
+            general: "OFFLINE",
+            lieutenant: "OFFLINE",
+            sergeant: "OFFLINE",
+            major: "OFFLINE",
+            colonel: "OFFLINE"
         };
     }
 
-    /**************************************************************
-     * INITIALIZATION
-     **************************************************************/
-    init(G) {
-        this.cleanup();
-        this.general = G;
+    /* ============================================================
+       INIT
+       ============================================================ */
+    init(General) {
+        this.general = General;
 
         this.createHost();
-        this.injectStyles();
-        this.createToggleButton();
-        this.createDrawer();
-        this.registerSignals();
+        this.renderBaseHTML();
+        this.applyBaseStyles();
 
-        // Initialize all interaction logic from your original script
-        this.initResizers();
-        this.initTabScrolling();
-        this.initAlertSliders();
+        this.attachButtonLogic();
+        this.attachDragLogic();
+        this.attachResizeObserver();
 
-        // Load Default Tab
-        this.switchTab("dashboard");
+        this.updateDrawerSide();
+        this.applyAnimationPreferences();
 
-        console.log("%c[Major v7.1] GUI Fully Operational", "color:#0f0");
+        this.startInlineScanner();
+        this.startSitrepRouter();
+        this.startOfficerReadyListener();
+
+        if (this.general && this.general.signals) {
+            this.general.signals.dispatch("UI_READY", {});
+        }
+
+        // Major is online
+        this.general.signals.dispatch("MAJOR_READY", {});
     }
 
-    /**************************************************************
-     * DOM SETUP
-     **************************************************************/
+    /* ============================================================
+       HOST + SHADOW DOM
+       ============================================================ */
     createHost() {
-        // Remove old if exists
-        const old = document.querySelector("fwh-root");
-        if(old) old.remove();
+        if (this.host) return;
 
-        const host = document.createElement("fwh-root");
-        document.body.appendChild(host);
-        
-        this.host = host;
-        this.shadow = host.attachShadow({ mode: "open" });
+        this.host = document.createElement("div");
+        this.host.id = "nexus-major-host";
+        this.host.style.position = "fixed";
+        this.host.style.zIndex = "999999";
+
+        // Attach shadow root
+        this.shadow = this.host.attachShadow({ mode: "open" });
+
+        document.body.appendChild(this.host);
     }
 
-    injectStyles() {
-        const style = document.createElement("style");
-        style.textContent = this.getStyles(this.settings.height, this.settings.width);
-        this.shadow.appendChild(style);
-        
-        // CSS Vars
-        this.host.style.setProperty("--drawer-height", this.settings.height);
-        this.host.style.setProperty("--drawer-width", this.settings.width);
-    }
+    /* ============================================================
+       BASE DRAWER HTML (NO PLACEHOLDERS)
+       ============================================================ */
+    renderBaseHTML() {
+        if (!this.shadow) return;
 
-    /**************************************************************
-     * TOGGLE BUTTON
-     **************************************************************/
-    createToggleButton() {
-        const btn = document.createElement("div");
-        btn.className = "fwh-toggle-btn";
-        btn.style.width = this.settings.btnW + "px";
-        btn.style.height = this.settings.btnH + "px";
-        btn.innerHTML = `
-            <img id="fwh-bear-logo" src="https://i.postimg.cc/fbktXTq2/Bear-head.png"
-                 style="object-fit:contain;filter:drop-shadow(0 1px 1px rgba(0,0,0,0.6)); width:70%; height:70%;">
-        `;
-        
-        btn.onclick = () => this.drawer.classList.toggle("open");
-        this.shadow.appendChild(btn);
-        this.toggleBtn = btn;
-    }
-
-    /**************************************************************
-     * DRAWER & TABS
-     **************************************************************/
-    createDrawer() {
-        const d = document.createElement("div");
-        d.className = `fwh-drawer ${this.settings.side}`;
-        d.innerHTML = `
-            <div class="fwh-d-header">
-                <span>Faction War Hub</span>
-                <div class="fwh-header-btns">
-                    <div class="fwh-header-icon" id="fwh-refresh">↻</div>
-                    <div class="fwh-header-icon" id="fwh-close">✖</div>
-                </div>
-            </div>
-            <div class="fwh-tabs" id="fwh-tabs"></div>
-            <div class="fwh-tab-panel" id="fwh-panel"></div>
-            
-            <div class="fwh-resize-y-top" id="fwh-resize-y-top"></div>
-            <div class="fwh-resize-y-bottom" id="fwh-resize-y-bottom"></div>
-            <div class="fwh-resize-x" id="fwh-resize-x"></div>
-        `;
-        this.shadow.appendChild(d);
-        this.drawer = d;
-
-        d.querySelector("#fwh-close").onclick = () => d.classList.remove("open");
-        d.querySelector("#fwh-refresh").onclick = () => window.location.reload(); // Simple refresh for now
-
-        // Build Tabs
-        this.addTab("dashboard", "Dashboard");
-        this.addTab("chain", "Chain");
-        this.addTab("targets", "Targets");
-        this.addTab("war", "War");
-        this.addTab("roster", "Roster");
-        this.addTab("settings", "Settings");
-    }
-
-    addTab(id, name) {
-        const strip = this.drawer.querySelector("#fwh-tabs");
-        const btn = document.createElement("div");
-        btn.className = "fwh-tab-btn";
-        btn.textContent = name;
-        btn.onclick = () => this.switchTab(id);
-        strip.appendChild(btn);
-        this.tabs[id] = btn;
-    }
-
-    switchTab(id) {
-        this.activeTab = id;
-        const panel = this.drawer.querySelector("#fwh-panel");
-        
-        Object.values(this.tabs).forEach(b => b.classList.remove("active"));
-        if(this.tabs[id]) this.tabs[id].classList.add("active");
-
-        panel.innerHTML = ""; // Clear current
-
-        if(id === "dashboard") this.renderDashboard(panel);
-        if(id === "chain") this.renderChain(panel);
-        if(id === "targets") this.renderTargets(panel);
-        if(id === "war") this.renderWar(panel);
-        if(id === "roster") this.renderRoster(panel);
-        if(id === "settings") this.renderSettingsMenu(panel);
-    }
-
-    /**************************************************************
-     * PANEL RENDERERS
-     **************************************************************/
-    
-    // --- DASHBOARD ---
-    renderDashboard(panel) {
-        const c = this.cache.chain;
-        const w = this.cache.war;
-        
-        panel.innerHTML = `
-        <div class="dashboard-wrap">
-            <div class="dashboard-grid">
-                <div class="dash-tile">
-                    <div class="dash-title">Chain</div>
-                    <div class="dash-value">${c.current > 0 ? "ACTIVE" : "IDLE"}</div>
-                    <div class="dash-row"><span>Count</span><span class="dash-subtext">${c.current} / ${c.max || '∞'}</span></div>
-                    <div class="dash-row"><span>Timer</span><span class="dash-subtext">${c.timeout}s</span></div>
-                </div>
-                <div class="dash-tile">
-                    <div class="dash-title">War Status</div>
-                    <div class="dash-value">${w.wall?.health ? "WAR" : "PEACE"}</div>
-                    <div class="dash-row"><span>Wall</span><span class="dash-subtext">${w.wall?.health || "--"}</span></div>
-                    <div class="dash-row"><span>Score</span><span class="dash-subtext">${w.score?.faction||0} vs ${w.score?.enemy||0}</span></div>
-                </div>
-                <div class="dash-tile">
-                    <div class="dash-title">Quick Links</div>
-                    <div class="dash-links">
-                        <div class="dash-link" onclick="window.location.href='/crimes.php'">Crimes</div>
-                        <div class="dash-link" onclick="window.location.href='/gym.php'">Gym</div>
-                        <div class="dash-link" onclick="window.location.href='/items.php'">Items</div>
+        this.shadow.innerHTML = `
+            <div id="nexus-container">
+                <button id="nexus-toggle" class="nexus-btn">≡</button>
+                <div id="nexus-drawer">
+                    <div class="drawer-header">
+                        <span class="drawer-title">WAR NEXUS</span>
                     </div>
+
+                    <!-- TABS -->
+                    <div id="nexus-tabs"></div>
+
+                    <!-- PANELS -->
+                    <div id="nexus-panels"></div>
                 </div>
             </div>
-        </div>`;
+        `;
+
+        this.drawerEl = this.shadow.querySelector("#nexus-drawer");
+        this.buttonEl = this.shadow.querySelector("#nexus-toggle");
+        this.tabsContainer = this.shadow.querySelector("#nexus-tabs");
+        this.panelsContainer = this.shadow.querySelector("#nexus-panels");
+
+        this.buildTabs();
+        this.buildPanels();
     }
 
-    // --- CHAIN (With Sliders) ---
-    renderChain(panel) {
-        const c = this.cache.chain;
-        const pct = c.max ? (c.current / c.max) * 100 : 0;
-        
-        panel.innerHTML = `
-        <div style="flex:1; display:flex; flex-direction:column; min-height:0;">
-            <div class="chain-hud" id="chain-hud">
-                <div class="chain-hud-head">
-                    <div class="chain-icon">👁️</div>
-                    <div class="chain-title">Chain <span id="chain-timer">${c.timeout}s</span></div>
-                    <div class="chain-icon" id="open-chain-settings">⚙️</div>
-                </div>
-                <div class="chain-bar">
-                    <div class="chain-bar-fill" id="chain-fill-bar" style="width:${pct}%"></div>
-                    <div class="chain-bar-text" id="chain-text">${c.current} / ${c.max || '∞'}</div>
-                </div>
-            </div>
-            
-            <div class="chain-settings" id="chain-settings" style="display:none;">
-                <div class="chain-settings-header">
-                    <div class="chain-back-btn" id="chain-back-btn">←</div>
-                    <div>Chain Settings</div>
-                </div>
-                <div class="chain-settings-section">ALERT LEVELS</div>
-                ${this.alertSliderBlock("Orange Alert","orange","00:30","02:00","chain-orange")}
-                ${this.alertSliderBlock("Red Alert","red","00:00","01:00","chain-red")}
-            </div>
-        </div>`;
-        
-        // Re-attach slider logic because we just overwrote the HTML
-        setTimeout(() => this.initAlertSliders(), 50);
+    /* ============================================================
+       BASE CSS + VARIABLES
+       ============================================================ */
+    applyBaseStyles() {
+        if (!this.shadow) return;
+        const style = document.createElement("style");
 
-        panel.querySelector("#open-chain-settings").onclick = () => {
-            panel.querySelector("#chain-hud").style.display = "none";
-            panel.querySelector("#chain-settings").style.display = "block";
-        };
-        panel.querySelector("#chain-back-btn").onclick = () => {
-            panel.querySelector("#chain-settings").style.display = "none";
-            panel.querySelector("#chain-hud").style.display = "flex";
-        };
-    }
+        style.textContent = `
+            :host { all: initial; }
 
-    // --- TARGETS (Cloud) ---
-    renderTargets(panel) {
-        const inputHtml = `
-            <div class="card">
-                <div style="display:flex; gap:4px;">
-                    <input type="number" id="inp-tid" class="fwh-modal-input" placeholder="ID" style="width:30%">
-                    <input type="text" id="inp-tname" class="fwh-modal-input" placeholder="Name">
-                    <button class="fwh-btn fwh-btn-accent" id="btn-push">ADD</button>
-                </div>
-            </div>`;
-
-        const list = this.cache.targets || [];
-        let rows = "";
-        list.sort((a,b) => b.timestamp - a.timestamp).forEach(t => {
-             rows += `<tr><td>${t.name}</td><td>${t.id}</td><td><a href="/loader.php?sid=attack&userID=${t.id}">⚔️</a></td></tr>`;
-        });
-        
-        panel.innerHTML = inputHtml + this.mkTable(["Name","ID","Link"], rows);
-
-        panel.querySelector("#btn-push").onclick = () => {
-            const id = panel.querySelector("#inp-tid").value;
-            const name = panel.querySelector("#inp-tname").value;
-            if(id) {
-                this.general.signals.dispatch("REQUEST_ADD_SHARED_TARGET", { id, name, timestamp: Date.now() });
-                panel.querySelector("#inp-tid").value = "";
-                panel.querySelector("#inp-tname").value = "";
+            #nexus-container {
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                pointer-events: none;
+                --drawer-transition: 0.32s;
+                --button-transition: 0.15s;
             }
-        };
-    }
 
-    // --- WAR ---
-    renderWar(panel) {
-        const list = this.cache.war.enemies || [];
-        let rows = "";
-        list.forEach(e => {
-            const s = e.status?.state || "N/A";
-            const lvl = e.level || 0;
-            rows += `<tr><td>${e.name}</td><td>${lvl}</td><td>${s}</td><td><a href="/loader.php?sid=attack&userID=${e.id}">⚔️</a></td></tr>`;
-        });
-        panel.innerHTML = this.mkTable(["Enemy","Lvl","Status","Atk"], rows);
-    }
+            .nexus-btn {
+                pointer-events: auto;
+                position: fixed;
+                width: 50px;
+                height: 50px;
+                border-radius: 50%;
+                font-size: 20px;
+                border: none;
+                background: #0a0a0a;
+                color: #00c8ff;
+                box-shadow: 0 0 8px #00c8ff;
+                cursor: pointer;
+                transition: transform var(--button-transition) ease, box-shadow var(--button-transition) ease;
+                user-select: none;
+                bottom: 20px;
+                left: 20px;
+            }
 
-    // --- ROSTER ---
-    renderRoster(panel) {
-        const list = Object.values(this.cache.faction.members || {});
-        let rows = "";
-        list.forEach(m => {
-             rows += `<tr><td>${m.name}</td><td>${m.status?.state}</td><td>${m.last_action?.relative}</td></tr>`;
-        });
-        panel.innerHTML = this.mkTable(["Name","Status","Seen"], rows);
-    }
-    
-    // --- SETTINGS MENU ---
-    renderSettingsMenu(panel) {
-        panel.innerHTML = `
-        <div class="card" style="padding:14px;">
-            <div class="settings-group-title">Display & Layout</div>
-            <div class="setting-row">
-                <div class="setting-label">Drawer Side</div>
-                <select id="set-side" style="background:#222; color:#fff; border:1px solid #444;">
-                    <option value="left">Left</option>
-                    <option value="right">Right</option>
-                </select>
-            </div>
-            <div class="setting-row">
-                <div class="setting-label">Button Size</div>
-                <input type="range" id="set-btn-size" min="32" max="96" value="${this.settings.btnW}">
-            </div>
-        </div>`;
-        
-        const sel = panel.querySelector("#set-side");
-        sel.value = this.settings.side;
-        sel.onchange = () => {
-            this.settings.side = sel.value;
-            GM_setValue("FWH_DRAWER_SIDE", sel.value);
-            this.drawer.className = `fwh-drawer ${sel.value} open`;
-        };
-        
-        const rng = panel.querySelector("#set-btn-size");
-        rng.oninput = () => {
-            const val = rng.value;
-            this.toggleBtn.style.width = val + "px";
-            this.toggleBtn.style.height = val + "px";
-            GM_setValue("FWH_BTN_WIDTH", val);
-            GM_setValue("FWH_BTN_HEIGHT", val);
-        };
-    }
+            .nexus-btn:hover {
+                transform: scale(1.1);
+                box-shadow: 0 0 12px #00e1ff;
+            }
 
-    /**************************************************************
-     * SIGNAL BRIDGE (Live Updates)
-     **************************************************************/
-    registerSignals() {
-        this.general.signals.listen("SITREP_UPDATE", d => {
-            if(!d) return;
-            this.cache.chain = d.chain || this.cache.chain;
-            this.cache.war = d.war || this.cache.war;
-            if(d.faction) this.cache.faction = d.faction;
+            #nexus-drawer {
+                position: fixed;
+                top: 0;
+                width: 360px;
+                height: 100vh;
+                background: rgba(0,0,0,0.92);
+                backdrop-filter: blur(6px);
+                border-right: 2px solid #00c8ff;
+                box-shadow: 0 0 20px #00c8ff55;
+                overflow: hidden;
+                transform: translateX(-100%);
+                transition: transform var(--drawer-transition) cubic-bezier(0.19, 1, 0.22, 1);
+                pointer-events: auto;
+            }
 
-            // Live Updates
-            if(this.activeTab === "chain") {
-                const tmr = this.shadow.querySelector("#chain-timer");
-                const txt = this.shadow.querySelector("#chain-text");
-                const bar = this.shadow.querySelector("#chain-fill-bar");
-                
-                if(tmr && d.chain) {
-                    tmr.textContent = d.chain.timeout + "s";
-                    txt.textContent = `${d.chain.current} / ${d.chain.max || '∞'}`;
-                    const pct = d.chain.max ? (d.chain.current / d.chain.max) * 100 : 0;
-                    bar.style.width = pct + "%";
+            #nexus-drawer.right {
+                border-right: none;
+                border-left: 2px solid #00c8ff;
+                transform: translateX(100%);
+            }
+
+            .drawer-open-left { transform: translateX(0) !important; }
+            .drawer-closed-left { transform: translateX(-100%) !important; }
+
+            .drawer-open-right { transform: translateX(0) !important; }
+            .drawer-closed-right { transform: translateX(100%) !important; }
+
+            .drawer-header {
+                padding: 12px;
+                font-size: 18px;
+                font-weight: bold;
+                color: #00eaff;
+                border-bottom: 1px solid #003f4f;
+            }
+
+            /* BASIC GRID NORMALIZATION */
+            .tile-grid,
+            .user-grid,
+            .settings-grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 8px;
+                padding: 8px;
+            }
+
+            @media (max-width: 768px) {
+                #nexus-drawer { width: 100vw; }
+                .nexus-btn { width: 44px; height: 44px; font-size: 18px; }
+                .tile-grid,
+                .user-grid,
+                .settings-grid {
+                    grid-template-columns: 1fr;
                 }
             }
-        });
+        `;
 
-        this.general.signals.listen("SHARED_TARGETS_UPDATED", t => {
-            this.cache.targets = t || [];
-            if(this.activeTab === "targets") this.switchTab("targets");
-        });
+        this.shadow.appendChild(style);
     }
 
-    /**************************************************************
-     * RESIZER LOGIC (Ported from warGUI.js)
-     **************************************************************/
-    initResizers() {
-        const handleTop = this.shadow.querySelector("#fwh-resize-y-top");
-        const handleBottom = this.shadow.querySelector("#fwh-resize-y-bottom");
-        const handleSide = this.shadow.querySelector("#fwh-resize-x");
-        
-        let startX, startY, startW, startH, mode;
+    /* ============================================================
+       TABS SETUP
+       ============================================================ */
+    buildTabs() {
+        if (!this.tabsContainer) return;
 
-        const onMove = (e) => {
-            if (!mode) return;
-            e.preventDefault();
-            
-            if (this.rafId) return;
-            this.rafId = requestAnimationFrame(() => {
-                this.rafId = null;
-                const dx = e.clientX - startX;
-                const dy = e.clientY - startY;
+        this.tabsContainer.innerHTML = `
+            <button class="nexus-tab" data-tab="main">Main</button>
+            <button class="nexus-tab" data-tab="chain">Chain</button>
+            <button class="nexus-tab" data-tab="faction">Faction</button>
+            <button class="nexus-tab" data-tab="enemy">Enemies</button>
+            <button class="nexus-tab" data-tab="targets">Targets</button>
+            <button class="nexus-tab" data-tab="colonel">Ask Colonel</button>
+            <button class="nexus-tab" data-tab="settings">Settings</button>
+        `;
 
-                if (mode.includes("height")) {
-                    let h = startH + (mode === "height-bottom" ? dy : -dy);
-                    h = Math.max(200, Math.min(window.innerHeight * 0.9, h));
-                    this.drawer.style.height = h + "px";
-                    this.host.style.setProperty("--drawer-height", h + "px");
-                    GM_setValue("FWH_DRAWER_HEIGHT", h + "px");
-                }
-                if (mode === "width") {
-                    const isLeft = this.drawer.classList.contains("left");
-                    let w = startW + (isLeft ? dx : -dx);
-                    w = Math.max(230, Math.min(420, w));
-                    this.drawer.style.width = w + "px";
-                    this.host.style.setProperty("--drawer-width", w + "px");
-                    GM_setValue("FWH_DRAWER_WIDTH", w + "px");
-                }
-            });
-        };
-
-        const onUp = (e) => {
-            mode = null;
-            this.drawer.classList.remove("resizing");
-            window.removeEventListener("pointermove", onMove);
-            window.removeEventListener("pointerup", onUp);
-            // Release capture if supported
-            if(e.target.releasePointerCapture) e.target.releasePointerCapture(e.pointerId);
-        };
-
-        const onDown = (m, e) => {
-            e.preventDefault();
-            mode = m;
-            this.drawer.classList.add("resizing");
-            startX = e.clientX; startY = e.clientY;
-            startW = this.drawer.offsetWidth; startH = this.drawer.offsetHeight;
-            
-            if(e.target.setPointerCapture) e.target.setPointerCapture(e.pointerId);
-            window.addEventListener("pointermove", onMove);
-            window.addEventListener("pointerup", onUp);
-        };
-
-        handleTop.onpointerdown = e => onDown("height-top", e);
-        handleBottom.onpointerdown = e => onDown("height-bottom", e);
-        handleSide.onpointerdown = e => onDown("width", e);
-    }
-
-    /**************************************************************
-     * SLIDER LOGIC (Ported from warGUI.js)
-     **************************************************************/
-    initAlertSliders() {
-        this.shadow.querySelectorAll(".alert-slider-track").forEach(track => {
-            const key = track.dataset.slider;
-            const saved = GM_getValue(key, null);
-            const knobA = track.querySelector('[data-knob="a"]');
-            const knobB = track.querySelector('[data-knob="b"]');
-
-            if (saved) {
-                knobA.style.left = saved.a + "%";
-                knobB.style.left = saved.b + "%";
-            }
-            this.updateAlertVisuals(track);
-
-            [knobA, knobB].forEach(k => {
-                k.onpointerdown = (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    k.setPointerCapture(e.pointerId);
-                    
-                    const onMove = (ev) => {
-                        const rect = track.getBoundingClientRect();
-                        let pct = ((ev.clientX - rect.left) / rect.width) * 100;
-                        pct = Math.max(0, Math.min(100, pct));
-                        k.style.left = pct + "%";
-                        this.updateAlertVisuals(track);
-                    };
-                    
-                    const onUp = (ev) => {
-                        k.releasePointerCapture(ev.pointerId);
-                        k.onpointermove = null;
-                        k.onpointerup = null;
-                        GM_setValue(key, { 
-                            a: parseFloat(knobA.style.left), 
-                            b: parseFloat(knobB.style.left) 
-                        });
-                    };
-                    
-                    k.onpointermove = onMove;
-                    k.onpointerup = onUp;
-                };
+        const buttons = this.tabsContainer.querySelectorAll(".nexus-tab");
+        buttons.forEach(btn => {
+            btn.addEventListener("click", () => {
+                this.activeTab = btn.dataset.tab;
+                this.renderActivePanel();
             });
         });
     }
 
-    updateAlertVisuals(track) {
-        const fill = track.querySelector(".alert-range-fill");
-        const kA = track.querySelector('[data-knob="a"]');
-        const kB = track.querySelector('[data-knob="b"]');
-        const labels = track.nextElementSibling.querySelectorAll("span");
-        
-        const a = parseFloat(kA.style.left) || 0;
-        const b = parseFloat(kB.style.left) || 100;
-        const min = Math.min(a,b);
-        const max = Math.max(a,b);
-        
-        fill.style.left = min + "%";
-        fill.style.width = (max - min) + "%";
-        
-        if(labels.length >= 2) {
-            labels[0].textContent = this.pctToTime(a, track.dataset.min, track.dataset.max);
-            labels[1].textContent = this.pctToTime(b, track.dataset.min, track.dataset.max);
+    /* ============================================================
+       PANELS SETUP
+       ============================================================ */
+    buildPanels() {
+        if (!this.panelsContainer) return;
+
+        this.panelsContainer.innerHTML = `
+            <div id="panel-main"></div>
+            <div id="panel-chain"></div>
+            <div id="panel-faction"></div>
+            <div id="panel-enemy"></div>
+            <div id="panel-targets"></div>
+            <div id="panel-colonel"></div>
+            <div id="panel-settings"></div>
+        `;
+
+        this.renderActivePanel();
+    }
+
+    renderActivePanel() {
+        const list = [
+            "main", "chain", "faction", "enemy",
+            "targets", "colonel", "settings"
+        ];
+
+        list.forEach(id => {
+            const el = this.shadow.querySelector(`#panel-${id}`);
+            if (!el) return;
+            el.style.display = (id === this.activeTab) ? "block" : "none";
+        });
+    }
+
+    /* ============================================================
+       DRAWER / BUTTON LOGIC
+       ============================================================ */
+    attachButtonLogic() {
+        if (!this.buttonEl) return;
+
+        this.buttonEl.addEventListener("click", () => {
+            if (this._isDragging || this.dragging) return;
+            this.toggleDrawer();
+        });
+
+        this.buttonEl.style.bottom = this.buttonPosition.bottom + "px";
+        this.buttonEl.style.left = this.buttonPosition.left + "px";
+        this.buttonEl.style.top = "auto";
+    }
+
+    toggleDrawer() {
+        this.drawerOpen = !this.drawerOpen;
+        this.applyDrawerClasses();
+    }
+
+    updateDrawerSide() {
+        if (!this.drawerEl) return;
+
+        if (this.drawerSide === "left") {
+            this.drawerEl.classList.remove("right");
+            this.drawerEl.style.left = "0";
+            this.drawerEl.style.right = "unset";
+        } else {
+            this.drawerEl.classList.add("right");
+            this.drawerEl.style.right = "0";
+            this.drawerEl.style.left = "unset";
+        }
+
+        this.applyDrawerClasses();
+    }
+
+    applyDrawerClasses() {
+        if (!this.drawerEl) return;
+
+        if (this.drawerSide === "left") {
+            this.drawerEl.className = this.drawerOpen
+                ? "drawer-open-left"
+                : "drawer-closed-left";
+        } else {
+            this.drawerEl.className = this.drawerOpen
+                ? "drawer-open-right"
+                : "drawer-closed-right";
         }
     }
 
-    pctToTime(pct, minStr, maxStr) {
-        const [m1,s1] = minStr.split(":").map(Number);
-        const [m2,s2] = maxStr.split(":").map(Number);
-        const start = m1*60 + s1;
-        const end = m2*60 + s2;
-        const val = start + (pct/100)*(end-start);
-        const m = Math.floor(val/60);
-        const s = Math.round(val%60);
-        return `${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
-    }
+    /* ============================================================
+       DRAGGING LOGIC (POLISHED)
+       ============================================================ */
+    attachDragLogic() {
+        if (!this.buttonEl) return;
 
-    /**************************************************************
-     * TAB SCROLLING (Ported)
-     **************************************************************/
-    initTabScrolling() {
-        const strip = this.drawer.querySelector("#fwh-tabs");
-        let isDown = false, startX, scrollLeft;
-        
-        strip.onmousedown = e => {
+        let isDown = false;
+
+        const start = (e) => {
             isDown = true;
-            startX = e.pageX - strip.offsetLeft;
-            scrollLeft = strip.scrollLeft;
+            this.dragging = false;
+            this._isDragging = false;
+
+            const pt = e.touches ? e.touches[0] : e;
+            const rect = this.buttonEl.getBoundingClientRect();
+            this.dragOffsetX = pt.clientX - rect.left;
+            this.dragOffsetY = pt.clientY - rect.top;
         };
-        strip.onmouseleave = () => isDown = false;
-        strip.onmouseup = () => isDown = false;
-        strip.onmousemove = e => {
-            if(!isDown) return;
-            e.preventDefault();
-            const x = e.pageX - strip.offsetLeft;
-            strip.scrollLeft = scrollLeft - (x - startX);
+
+        const move = (e) => {
+            if (!isDown) return;
+
+            const pt = e.touches ? e.touches[0] : e;
+
+            this.dragging = true;
+            this._isDragging = true;
+
+            let x = pt.clientX - this.dragOffsetX;
+            let y = pt.clientY - this.dragOffsetY;
+
+            const clamped = this.clampButtonPosition(x, y);
+            this.buttonEl.style.left = clamped.x + "px";
+            this.buttonEl.style.top = clamped.y + "px";
+            this.buttonEl.style.bottom = "auto";
+        };
+
+        const end = () => {
+            if (!isDown) return;
+            isDown = false;
+
+            setTimeout(() => {
+                this._isDragging = false;
+            }, 120);
+        };
+
+        this.buttonEl.addEventListener("mousedown", start);
+        this.buttonEl.addEventListener("touchstart", start, { passive: true });
+
+        window.addEventListener("mousemove", move);
+        window.addEventListener("touchmove", move, { passive: true });
+
+        window.addEventListener("mouseup", end);
+        window.addEventListener("touchend", end);
+        window.addEventListener("touchcancel", end);
+    }
+
+    clampButtonPosition(x, y) {
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        const rect = this.buttonEl.getBoundingClientRect();
+
+        const maxX = w - rect.width - 8;
+        const maxY = h - rect.height - 8;
+        const minX = 8;
+        const minY = 8;
+
+        return {
+            x: Math.max(minX, Math.min(maxX, x)),
+            y: Math.max(minY, Math.min(maxY, y))
         };
     }
 
-    cleanup() { if(this.host) this.host.remove(); }
-    
-    mkTable(h,r) {
-        return `
-        <div class="scroll-table-container">
-            <table class="fwh-table scroll-table">
-                <thead><tr>${h.map(x=>`<th>${x}</th>`).join("")}</tr></thead>
-                <tbody>${r || "<tr><td>No Data</td></tr>"}</tbody>
-            </table>
-        </div>`;
+    /* ============================================================
+       ANIMATION PREFERENCES
+       ============================================================ */
+    applyAnimationPreferences() {
+        let drawerTime = 0.32;
+        let btnTime = 0.15;
+
+        if (this.shadow) {
+            const r = this.shadow.host || this.host;
+            if (r && r.style) {
+                r.style.setProperty("--drawer-transition", drawerTime + "s");
+                r.style.setProperty("--button-transition", btnTime + "s");
+            }
+        }
+
+        if (this.drawerEl) {
+            this.drawerEl.style.transitionDuration = drawerTime + "s";
+        }
+        if (this.buttonEl) {
+            this.buttonEl.style.transitionDuration = btnTime + "s";
+        }
     }
 
-    alertSliderBlock(label,color,start,end,key) {
-        return `
-        <div class="alert-slider-block ${color}">
-            <div class="alert-label"><span>⏱️</span><span>${label}</span></div>
-            <div class="alert-slider-track" data-slider="${key}" data-min="${start}" data-max="${end}">
-                <div class="alert-range-fill"></div>
-                <div class="alert-knob" data-knob="a" style="left:0%;"></div>
-                <div class="alert-knob" data-knob="b" style="left:100%;"></div>
+    /* ============================================================
+       SIZE LISTENER
+       ============================================================ */
+    attachResizeObserver() {
+        window.addEventListener("resize", () => {
+            this.updateDrawerSide();
+        });
+    }
+
+    /* ============================================================
+       INLINE SCANNER START (IMPLEMENTED LATER IN MSG 2/3)
+       ============================================================ */
+    startInlineScanner() {
+        if (this.inlineScanner) clearInterval(this.inlineScanner);
+        this.inlineScanner = setInterval(() => {
+            this.scanAndAttachInlineButtons();
+        }, 1000);
+    }
+
+    /* ============================================================
+       SITREP ROUTER START (IMPLEMENTED IN MSG 3/3)
+       ============================================================ */
+    startSitrepRouter() {
+        if (!this.general || !this.general.signals) return;
+
+        this.general.signals.listen("SITREP_UPDATE", data => this.routeSitrep(data));
+        this.general.signals.listen("TARGET_SCORES_READY", data => this.updateTargetScores(data));
+        this.general.signals.listen("PLAYER_SITREP_READY", data => this.updateAnalyzeResult(data));
+        this.general.signals.listen("GLOBAL_SITREP_READY", data => this.routeGlobalSitrep(data));
+        this.general.signals.listen("FACTION_SITREP_READY", data => this.routeFactionSitrep(data));
+        this.general.signals.listen("ASK_COLONEL_RESPONSE", data => this.updateColonelAnswer(data));
+    }
+
+    /* ============================================================
+       OFFICER READY LISTENER
+       ============================================================ */
+    startOfficerReadyListener() {
+        if (!this.general || !this.general.signals) return;
+
+        const map = {
+            "GENERAL_READY": "general",
+            "LIEUTENANT_READY": "lieutenant",
+            "SERGEANT_READY": "sergeant",
+            "MAJOR_READY": "major",
+            "COLONEL_READY": "colonel"
+        };
+
+        Object.keys(map).forEach(signal => {
+            this.general.signals.listen(signal, () => {
+                this.setOfficerOnline(map[signal]);
+            });
+        });
+    }
+
+    setOfficerOnline(name) {
+        this.officerStatus[name] = "ONLINE";
+        this.checkAllOfficersReady();
+    }
+
+    setOfficerOffline(name) {
+        this.officerStatus[name] = "OFFLINE";
+    }
+
+    checkAllOfficersReady() {
+        const all = Object.values(this.officerStatus).every(v => v === "ONLINE");
+        if (!all) return;
+        this.unlockUI();
+    }
+
+    unlockUI() {
+        this.startInlineScanner();
+    }
+
+    /* ============================================================
+       The remaining UI logic is in Messages 2/3 and 3/3…
+       ============================================================ */
+
+}
+
+/* ============================================================
+   REGISTER WITH GENERAL
+   ============================================================ */
+WAR_GENERAL.register("Major", Major);
+
+    /* ============================================================
+   PANEL RENDERING ENGINE
+   ============================================================ */
+
+    /* Main dispatcher */
+    routeSitrep(sitrep) {
+        if (!sitrep) return;
+
+        if (sitrep.user) this.updateUserUI(sitrep.user);
+        if (sitrep.factionMembers) this.renderFactionTable(sitrep.factionMembers);
+        if (sitrep.enemyFactionMembers) this.renderEnemyTable(sitrep.enemyFactionMembers);
+        if (sitrep.targets) this.renderTargetTables(sitrep.targets);
+        if (sitrep.chain) this.updateChainUI(sitrep.chain);
+        if (sitrep.chainLog) this.renderChainLog(sitrep.chainLog);
+        if (sitrep.heatmaps) this.updateHeatmaps(sitrep.heatmaps);
+    }
+
+
+/* ============================================================
+   BADGES + ICON RENDERERS
+   ============================================================ */
+
+    renderStatusBadge(status) {
+        const s = String(status || "").toLowerCase();
+
+        if (s.includes("hospital")) return `<span class="badge badge-hos">HOSP</span>`;
+        if (s.includes("jail"))     return `<span class="badge badge-jail">JAIL</span>`;
+        if (s.includes("travel"))   return `<span class="badge badge-travel">TRAVEL</span>`;
+        if (s.includes("okay") || s.includes("online")) return `<span class="badge badge-ok">OK</span>`;
+        return `<span class="badge badge-off">OFF</span>`;
+    }
+
+    renderThreatBadge(level) {
+        if (level >= 80) return `<span class="badge badge-xtr">EXTREME</span>`;
+        if (level >= 50) return `<span class="badge badge-hi">HIGH</span>`;
+        if (level >= 25) return `<span class="badge badge-med">MED</span>`;
+        return `<span class="badge badge-lo">LOW</span>`;
+    }
+
+    renderLevelBadge(level) {
+        if (!level) return `<span class="badge badge-off">--</span>`;
+        return `<span class="badge badge-lv">Lv ${level}</span>`;
+    }
+
+    renderFactionRankChip(rank) {
+        if (!rank) return `<span class="badge badge-off">--</span>`;
+        return `<span class="badge badge-rank">${rank}</span>`;
+    }
+
+    renderOnlineIndicator(type) {
+        switch (String(type)) {
+            case "online": return `<span class="dot dot-on"></span>`;
+            case "recent": return `<span class="dot dot-recent"></span>`;
+            case "danger": return `<span class="dot dot-danger"></span>`;
+            default:        return `<span class="dot dot-off"></span>`;
+        }
+    }
+
+
+/* ============================================================
+   MAIN PANEL — DASHBOARD
+   ============================================================ */
+    updateUserUI(user) {
+        const panel = this.shadow.querySelector("#panel-main");
+        if (!panel || !user) return;
+
+        panel.innerHTML = `
+            <div class="tile-grid">
+
+                <div class="tile">
+                    <h3>Your Status</h3>
+                    <p><b>Name:</b> ${user.name}</p>
+                    <p><b>Level:</b> ${this.renderLevelBadge(user.level)}</p>
+                    <p><b>Status:</b> ${this.renderStatusBadge(user.status)}</p>
+                    <p><b>Last Seen:</b> ${user.lastSeen ? new Date(user.lastSeen).toLocaleString() : "--"}</p>
+                </div>
+
+                <div class="tile">
+                    <h3>Threat</h3>
+                    <p>${this.renderThreatBadge(user.threat)}</p>
+                    <p><b>Risk:</b> ${(user.risk*100).toFixed(0)}%</p>
+                    <p><b>Behavior:</b> ${user.cluster}</p>
+                    <p><b>Predicted:</b> ${user.predictedBehavior}</p>
+                </div>
+
+                <div class="tile">
+                    <h3>War Overview</h3>
+                    <p><b>Enemy Online:</b> ${user.enemyOnline ?? "--"}</p>
+                    <p><b>Enemy Hosp:</b> ${user.enemyHospital ?? "--"}</p>
+                    <p><b>Danger:</b> ${user.danger ?? "--"}</p>
+                </div>
+
+                <div class="tile">
+                    <h3>Heatmap</h3>
+                    <canvas id="heatmap-main" width="300" height="100"></canvas>
+                </div>
+
             </div>
-            <div class="alert-time-labels"><span>${start}</span><span>${end}</span></div>
-        </div>`;
-    }
-
-    // CSS Generator (Your Exact Styles)
-    getStyles(height, width) {
-        return `
-        @import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap");
-        :host { --drawer-height: ${height}; --drawer-width: ${width}; --bg: #101214; --bg-alt: #16191d; --bg-panel: #1b1f23; --bg-hover: #22272c; --border: #2b2f34; --text: #e6e6e6; --text-muted: #9ba3ab; --accent: #52a8ff; --radius: 8px; font-family: "Inter", sans-serif; }
-        * { box-sizing: border-box; }
-        .fwh-toggle-btn { position: fixed; bottom: 14px; left: 10px; width: 48px; height: 48px; background: linear-gradient(180deg,#1a7a3a 0%,#0f6a32 40%,#0b4c23 100%); border-radius: 12px; border: 1px solid #063018; display: flex; align-items: center; justify-content: center; cursor: pointer; z-index: 999999; box-shadow: 0 4px 6px rgba(0,0,0,0.35); }
-        .fwh-drawer { position: fixed; top: 50%; height: var(--drawer-height); width: var(--drawer-width); background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--radius); display: flex; flex-direction: column; overflow: hidden; z-index: 9999999; box-shadow: 0 0 20px rgba(0,0,0,0.7); }
-        .fwh-drawer.left { left: 0; transform: translate(-100%, -50%); transition: transform 0.25s ease; }
-        .fwh-drawer.left.open { transform: translate(0, -50%); }
-        .fwh-drawer.right { right: 0; transform: translate(100%, -50%); transition: transform 0.25s ease; }
-        .fwh-drawer.right.open { transform: translate(0, -50%); }
-        .fwh-d-header { padding: 12px; background: var(--bg); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; font-weight: 600; align-items: center; }
-        .fwh-header-btns { display:flex; gap:8px; }
-        .fwh-header-icon { cursor:pointer; padding:4px; }
-        .fwh-tabs { display: flex; overflow-x: auto; border-bottom: 1px solid var(--border); background: var(--bg); user-select:none; }
-        .fwh-tab-btn { padding: 10px 14px; cursor: pointer; background: var(--bg-alt); border-right: 1px solid var(--border); font-size: 13px; white-space:nowrap; }
-        .fwh-tab-btn.active { background: var(--accent); color: #000; font-weight: bold; }
-        .fwh-tab-panel { flex: 1; padding: 10px; overflow-y: auto; display: flex; flex-direction: column; }
-        .fwh-resize-x { position: absolute; top: 0; right: -10px; width: 20px; height: 100%; cursor: ew-resize; z-index: 100; }
-        .fwh-drawer.right .fwh-resize-x { left:-10px; right:auto; }
-        .fwh-resize-y-top { position: absolute; top: -10px; left: 0; width: 100%; height: 20px; cursor: ns-resize; z-index: 100; }
-        .fwh-resize-y-bottom { position: absolute; bottom: -10px; left: 0; width: 100%; height: 20px; cursor: ns-resize; z-index: 100; }
-        .chain-hud { background: var(--bg); border: 1px solid var(--border); padding: 14px; border-radius: var(--radius); }
-        .chain-hud-head { display:flex; justify-content:space-between; margin-bottom:10px; font-size:16px; font-weight:bold; }
-        .chain-bar { height: 24px; background: #444; border-radius: 12px; overflow: hidden; position: relative; margin-top: 8px; }
-        .chain-bar-fill { height: 100%; background: #40d66b; transition: width 0.3s; }
-        .chain-bar-text { position: absolute; width: 100%; height: 100%; top: 0; display: flex; align-items: center; justify-content: center; font-weight: bold; color: #000; }
-        .dashboard-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-        .dash-tile { background:var(--bg); padding:10px; border:1px solid var(--border); border-radius:var(--radius); }
-        .dash-title { font-size:11px; text-transform:uppercase; color:var(--text-muted); margin-bottom:4px; }
-        .dash-value { font-size:18px; font-weight:bold; margin-bottom:6px; }
-        .dash-row { display:flex; justify-content:space-between; font-size:12px; margin-bottom:2px; }
-        .dash-links { display:flex; gap:4px; flex-wrap:wrap; }
-        .dash-link { padding:4px 8px; background:var(--bg-alt); border:1px solid var(--border); border-radius:4px; font-size:11px; cursor:pointer; }
-        table.fwh-table { width:100%; border-collapse:collapse; font-size:12px; }
-        table.fwh-table th { background:var(--bg-alt); padding:8px; text-align:left; border-bottom:1px solid var(--border); position:sticky; top:0; }
-        table.fwh-table td { padding:8px; border-bottom:1px solid #333; }
-        .scroll-table-container { flex:1; overflow-y:auto; border:1px solid var(--border); border-radius:var(--radius); }
-        .fwh-modal-input { width:100%; padding:6px; background:var(--bg); border:1px solid var(--border); color:#fff; }
-        .fwh-btn { padding:6px 12px; background:var(--bg-alt); border:1px solid var(--border); color:#fff; cursor:pointer; border-radius:4px; }
-        .fwh-btn-accent { background:var(--accent); color:#000; font-weight:bold; }
-        .alert-slider-block { margin-top:12px; padding:10px; background:var(--bg-panel); border:1px solid var(--border); border-radius:var(--radius); }
-        .alert-slider-track { position:relative; height:16px; background:#333; border-radius:8px; margin:10px 0; }
-        .alert-range-fill { position:absolute; height:100%; background:currentColor; opacity:0.3; border-radius:8px; }
-        .alert-knob { position:absolute; top:50%; transform:translate(-50%,-50%); width:18px; height:18px; background:#fff; border-radius:50%; cursor:grab; }
-        .alert-time-labels { display:flex; justify-content:space-between; font-size:11px; color:var(--text-muted); }
-        .orange { color:#ffb84a; }
-        .red { color:#ff4a4a; }
         `;
     }
-}
 
-if (window.WAR_GENERAL) {
-    window.WAR_GENERAL.register("Major", new Major());
-}
 
+/* ============================================================
+   FACTION TABLE
+   ============================================================ */
+    renderFactionTable(members) {
+        const panel = this.shadow.querySelector("#panel-faction");
+        if (!panel) return;
+
+        let rows = members.map(m => `
+            <tr>
+                <td>${this.renderOnlineIndicator(m.onlineState)}</td>
+                <td>${m.name}</td>
+                <td>${this.renderLevelBadge(m.level)}</td>
+                <td>${this.renderStatusBadge(m.status)}</td>
+                <td>${this.renderFactionRankChip(m.rank)}</td>
+                <td>${m.chainWatch ? `<span class="badge badge-ok">WATCH</span>` : `<span class="badge badge-off">OFF</span>`}</td>
+            </tr>
+        `).join("");
+
+        panel.innerHTML = `
+            <div class="tile">
+                <h3>Your Faction Members</h3>
+                <table class="nexus-table">
+                    <thead>
+                        <tr>
+                            <th>On</th>
+                            <th>Name</th>
+                            <th>Lv</th>
+                            <th>Status</th>
+                            <th>Rank</th>
+                            <th>Watch</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
+        `;
+    }
+
+
+/* ============================================================
+   ENEMY FACTION TABLE
+   ============================================================ */
+    renderEnemyTable(members) {
+        const panel = this.shadow.querySelector("#panel-enemy");
+        if (!panel) return;
+
+        let rows = members.map(m => `
+            <tr>
+                <td>${this.renderOnlineIndicator(m.onlineState)}</td>
+                <td>${m.name}</td>
+                <td>${this.renderLevelBadge(m.level)}</td>
+                <td>${this.renderStatusBadge(m.status)}</td>
+                <td>
+                    <span class="nib-att" data-id="${m.id}">⚔</span>
+                </td>
+            </tr>
+        `).join("");
+
+        panel.innerHTML = `
+            <div class="tile">
+                <h3>Enemy Faction Members</h3>
+                <table class="nexus-table">
+                    <thead>
+                        <tr>
+                            <th>On</th>
+                            <th>Name</th>
+                            <th>Lv</th>
+                            <th>Status</th>
+                            <th>Attack</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
+        `;
+
+        this.attachAttackButtons(panel);
+    }
+
+
+/* ============================================================
+   TARGETS PANEL WITH SUBTABS
+   ============================================================ */
+    renderTargetTables(targets) {
+        const panel = this.shadow.querySelector("#panel-targets");
+        if (!panel) return;
+
+        panel.innerHTML = `
+            <div class="target-subtabs">
+                <button class="target-tab" data-sub="personal">Personal</button>
+                <button class="target-tab" data-sub="war">War</button>
+                <button class="target-tab" data-sub="shared">Shared</button>
+            </div>
+            <div id="target-content"></div>
+        `;
+
+        const subtabs = panel.querySelectorAll(".target-tab");
+        subtabs.forEach(btn => {
+            btn.addEventListener("click", () => {
+                this.targetSubTab = btn.dataset.sub;
+                this.renderTargetSubpanel(targets);
+            });
+        });
+
+        this.renderTargetSubpanel(targets);
+    }
+
+    renderTargetSubpanel(targets) {
+        const dest = this.shadow.querySelector("#target-content");
+        if (!dest) return;
+
+        const list = this.targetSubTab === "personal"
+            ? targets.personal
+            : this.targetSubTab === "war"
+                ? targets.war
+                : targets.shared;
+
+        let rows = list.map(t => `
+            <tr>
+                <td>${this.renderOnlineIndicator(t.onlineState)}</td>
+                <td>${t.name}</td>
+                <td>${this.renderLevelBadge(t.level)}</td>
+                <td>${this.renderStatusBadge(t.status)}</td>
+                <td>${(t.colonelScore ?? 0).toFixed(2)}</td>
+                <td><span class="nib-att" data-id="${t.id}">⚔</span></td>
+                <td><span class="nib-ana" data-id="${t.id}">🔍</span></td>
+                <td><span class="nib-add" data-id="${t.id}">➕</span></td>
+            </tr>
+        `).join("");
+
+        dest.innerHTML = `
+            <table class="nexus-table">
+                <thead>
+                    <tr>
+                        <th>On</th>
+                        <th>Name</th>
+                        <th>Lv</th>
+                        <th>Status</th>
+                        <th>Score</th>
+                        <th>A</th>
+                        <th>Z</th>
+                        <th>+</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>
+        `;
+
+        this.attachAttackButtons(dest);
+        this.attachAnalyzeButtons(dest);
+        this.attachAddTargetButtons(dest);
+    }
+
+
+/* ============================================================
+   CHAIN PANEL
+   ============================================================ */
+    updateChainUI(chain) {
+        const panel = this.shadow.querySelector("#panel-chain");
+        if (!panel || !chain) return;
+
+        panel.innerHTML = `
+            <div class="tile-grid">
+                <div class="tile">
+                    <h3>Chain Status</h3>
+                    <p><b>Hits:</b> ${chain.hits}</p>
+                    <p><b>Timeout:</b> ${chain.timeLeft}s</p>
+                    <p><b>Pace:</b> ${chain.currentPace}/min</p>
+                    <p><b>Drop Risk:</b> ${chain.dropRisk}</p>
+                </div>
+
+                <div class="tile">
+                    <h3>Alerts</h3>
+                    <p>${chain.warning}</p>
+                    <p>${chain.message}</p>
+                </div>
+            </div>
+        `;
+    }
+
+
+/* ============================================================
+   CHAIN LOG (simple)
+   ============================================================ */
+    renderChainLog(log) {
+        const panel = this.shadow.querySelector("#panel-chain");
+        if (!panel) return;
+
+        const content = log.map(entry => `
+            <div class="chain-log-entry">
+                <b>${entry.player}</b> → +${entry.respect} respect
+                <span class="time">${new Date(entry.time).toLocaleTimeString()}</span>
+            </div>
+        `).join("");
+
+        const logBox = document.createElement("div");
+        logBox.className = "tile";
+        logBox.innerHTML = `
+            <h3>Chain Log</h3>
+            <div class="chain-log">${content}</div>
+        `;
+
+        panel.appendChild(logBox);
+    }
+
+
+/* ============================================================
+   ASK THE COLONEL PANEL
+   ============================================================ */
+    addColonelMessage(side, msg) {
+        const panel = this.shadow.querySelector("#panel-colonel");
+        if (!panel) return;
+
+        const box = panel.querySelector(".col-msgs");
+        if (!box) return;
+
+        const div = document.createElement("div");
+        div.className = side === "colonel" ? "col-msg col-reply" : "col-msg col-user";
+        div.textContent = msg;
+
+        box.appendChild(div);
+        box.scrollTop = box.scrollHeight;
+    }
+
+    updateColonelAnswer(data) {
+        if (!data || !data.answer) return;
+        this.addColonelMessage("colonel", data.answer);
+    }
+
+    /* Build the Colonel UI initially */
+    buildColonelPanel() {
+        const panel = this.shadow.querySelector("#panel-colonel");
+        if (!panel) return;
+
+        panel.innerHTML = `
+            <div class="tile">
+                <h3>Ask the Colonel</h3>
+                <div class="col-msgs"></div>
+                <input id="col-input" type="text" placeholder="Ask a tactical question...">
+                <button id="col-send">Send</button>
+            </div>
+        `;
+
+        const input = panel.querySelector("#col-input");
+        const send = panel.querySelector("#col-send");
+
+        send.addEventListener("click", () => {
+            const q = input.value.trim();
+            if (!q) return;
+            input.value = "";
+            this.addColonelMessage("user", q);
+            this.general.signals.dispatch("ASK_COLONEL", { question: q });
+        });
+    }
+
+
+/* ============================================================
+   SETTINGS PANEL
+   ============================================================ */
+    buildSettingsPanel() {
+        const panel = this.shadow.querySelector("#panel-settings");
+        if (!panel) return;
+
+        panel.innerHTML = `
+            <div class="settings-grid">
+
+                <div class="tile">
+                    <h3>Drawer Settings</h3>
+                    <label>Side:
+                        <select id="set-drawer-side">
+                            <option value="left">Left</option>
+                            <option value="right">Right</option>
+                        </select>
+                    </label>
+                </div>
+
+                <div class="tile">
+                    <h3>Animations</h3>
+                    <label>Speed:
+                        <select id="set-speed">
+                            <option value="normal">Normal</option>
+                            <option value="fast">Fast</option>
+                            <option value="slow">Slow</option>
+                        </select>
+                    </label>
+                    <label>
+                        <input type="checkbox" id="set-anim"> Enable animations
+                    </label>
+                </div>
+
+                <div class="tile">
+                    <h3>Chain Alerts</h3>
+                    <label>Critical (sec):
+                        <input type="range" id="alert-critical" min="5" max="60" value="15">
+                    </label>
+                    <label>High (sec):
+                        <input type="range" id="alert-high" min="10" max="120" value="30">
+                    </label>
+                    <label>Medium (sec):
+                        <input type="range" id="alert-med" min="20" max="180" value="60">
+                    </label>
+                </div>
+
+            </div>
+        `;
+    }
+
+
+/* ============================================================
+   ATTACK / ANALYZE / ADD TARGET EVENT BINDING
+   ============================================================ */
+
+    attachAttackButtons(container) {
+        const btns = container.querySelectorAll(".nib-att");
+        btns.forEach(btn => {
+            btn.addEventListener("click", e => {
+                e.stopPropagation();
+                const id = btn.dataset.id;
+                window.location.href = `/loader.php?sid=attack&user2ID=${id}`;
+            });
+        });
+    }
+
+    attachAnalyzeButtons(container) {
+        const btns = container.querySelectorAll(".nib-ana");
+        btns.forEach(btn => {
+            btn.addEventListener("click", e => {
+                e.stopPropagation();
+                const id = btn.dataset.id;
+                this.general.signals.dispatch("REQUEST_PLAYER_SITREP", { id });
+            });
+        });
+    }
+
+    attachAddTargetButtons(container) {
+        const btns = container.querySelectorAll(".nib-add");
+        btns.forEach(btn => {
+            btn.addEventListener("click", e => {
+                e.stopPropagation();
+                const id = btn.dataset.id;
+                this.general.signals.dispatch("ADD_TARGET", { id });
+            });
+        });
+    }
+
+
+/* ============================================================
+   INLINE PROFILE OVERLAYS
+   ============================================================ */
+
+    scanAndAttachInlineButtons() {
+        const links = document.querySelectorAll("a[href*='profiles.php?XID=']");
+
+        links.forEach(link => {
+            if (link.dataset.nexusEnhanced) return;
+
+            const id = this.extractInlineId(link.href);
+            if (!id) return;
+
+            const box = document.createElement("span");
+            box.className = "nexus-inline-buttons";
+            box.innerHTML = `
+                <span class="nib nib-attack" data-id="${id}">⚔</span>
+                <span class="nib nib-analyze" data-id="${id}">🔍</span>
+                <span class="nib nib-add" data-id="${id}">➕</span>
+                <span class="nib nib-share" data-id="${id}">⇪</span>
+            `;
+
+            link.insertAdjacentElement("afterend", box);
+
+            link.dataset.nexusEnhanced = "1";
+            this.attachInlineEvents(box);
+        });
+    }
+
+    extractInlineId(url) {
+        const m = url.match(/XID=(\d+)/);
+        return m ? m[1] : null;
+    }
+
+    attachInlineEvents(node) {
+        if (!node) return;
+
+        node.querySelectorAll(".nib-attack").forEach(btn => {
+            btn.addEventListener("click", e => {
+                e.stopPropagation();
+                window.location.href = `/loader.php?sid=attack&user2ID=${btn.dataset.id}`;
+            });
+        });
+
+        node.querySelectorAll(".nib-analyze").forEach(btn => {
+            btn.addEventListener("click", e => {
+                e.stopPropagation();
+                this.general.signals.dispatch("REQUEST_PLAYER_SITREP", { id: btn.dataset.id });
+            });
+        });
+
+        node.querySelectorAll(".nib-add").forEach(btn => {
+            btn.addEventListener("click", e => {
+                e.stopPropagation();
+                this.general.signals.dispatch("ADD_TARGET", { id: btn.dataset.id });
+            });
+        });
+    }
+
+
+/* ============================================================
+   HEATMAP ENGINE (Canvas)
+   ============================================================ */
+
+    updateHeatmaps(data) {
+        if (!data) return;
+
+        const main = this.shadow.querySelector("#heatmap-main");
+        if (main && data.onlineHeatmap) {
+            this.drawHeatmap(main, data.onlineHeatmap);
+        }
+    }
+
+    drawHeatmap(canvas, arr) {
+        const ctx = canvas.getContext("2d");
+        const w = canvas.width;
+        const h = canvas.height;
+        const bw = w / arr.length;
+
+        ctx.clearRect(0, 0, w, h);
+
+        const max = Math.max(...arr);
+
+        arr.forEach((v, i) => {
+            const pct = max ? v / max : 0;
+            const col = `rgba(0, 200, 255, ${pct})`;
+
+            ctx.fillStyle = col;
+            ctx.fillRect(i * bw, 0, bw - 2, h);
+        });
+    }
+    /* ============================================================
+   SETTINGS: LOAD & SAVE
+   ============================================================ */
+
+    loadSettings() {
+        try {
+            return JSON.parse(localStorage.getItem("nexusSettings") || "{}");
+        } catch(e) {
+            console.warn("[MAJOR] Settings load failed:", e);
+            return {};
+        }
+    }
+
+    saveSettings(cfg) {
+        try {
+            localStorage.setItem("nexusSettings", JSON.stringify(cfg));
+        } catch(e) {
+            console.warn("[MAJOR] Settings save failed:", e);
+        }
+    }
+
+    attachSettingsLogic() {
+        const cfg = this.loadSettings();
+
+        const sideEl   = this.shadow.querySelector("#set-drawer-side");
+        const speedEl  = this.shadow.querySelector("#set-speed");
+        const animEl   = this.shadow.querySelector("#set-anim");
+
+        const cCrit = this.shadow.querySelector("#alert-critical");
+        const cHigh = this.shadow.querySelector("#alert-high");
+        const cMed  = this.shadow.querySelector("#alert-med");
+
+        // Restore saved settings
+        if (cfg.drawerSide) sideEl.value = cfg.drawerSide;
+        if (cfg.speed)      speedEl.value = cfg.speed;
+        animEl.checked = cfg.anim !== "off";
+
+        if (cfg.alerts) {
+            if (cfg.alerts.critical) cCrit.value = cfg.alerts.critical;
+            if (cfg.alerts.high)     cHigh.value = cfg.alerts.high;
+            if (cfg.alerts.medium)   cMed.value  = cfg.alerts.medium;
+        }
+
+        // Save on change
+        const save = () => {
+            const newCfg = {
+                drawerSide: sideEl.value,
+                speed: speedEl.value,
+                anim: animEl.checked ? "on" : "off",
+                alerts: {
+                    critical: parseInt(cCrit.value, 10),
+                    high: parseInt(cHigh.value, 10),
+                    medium: parseInt(cMed.value, 10)
+                }
+            };
+            this.saveSettings(newCfg);
+            this.setDrawerSide(newCfg.drawerSide);
+            this.applyAnimationPreferences();
+        };
+
+        sideEl.addEventListener("change", save);
+        speedEl.addEventListener("change", save);
+        animEl.addEventListener("change", save);
+        cCrit.addEventListener("input", save);
+        cHigh.addEventListener("input", save);
+        cMed.addEventListener("input", save);
+    }
+
+    setDrawerSide(side) {
+        this.drawerSide = side;
+        this.updateDrawerSide();
+    }
+
+
+/* ============================================================
+   TARGET PERSISTENCE & SHARED TARGETS
+   ============================================================ */
+
+    // Add to personal targets
+    addToPersonalTargets(id) {
+        this.general.signals.dispatch("ADD_TARGET", { id });
+    }
+
+    // Share to faction
+    addToSharedTargets(target) {
+        this.general.signals.dispatch("SHARED_TARGET_ADD", target);
+    }
+
+
+/* ============================================================
+   SITREP ROUTER HELPERS
+   ============================================================ */
+
+    updateTargetScores(data) {
+        if (!data || !data.scored) return;
+
+        const targets = {
+            personal: data.scored.filter(t => t.type === "personal"),
+            war:      data.scored.filter(t => t.type === "war"),
+            shared:   data.scored.filter(t => t.type === "shared")
+        };
+
+        this.renderTargetTables(targets);
+    }
+
+    routeGlobalSitrep(data) {
+        if (!data) return;
+
+        this.updateHeatmaps({
+            onlineHeatmap: data.heatmap,
+            statusHeatmap: data.statusHeatmap,
+            attackHeatmap: data.attackHeatmap,
+            anomalyHeatmap: data.anomalyHeatmap
+        });
+    }
+
+    routeFactionSitrep(data) {
+        if (!data) return;
+
+        if (data.members) {
+            this.renderFactionTable(data.members);
+        }
+
+        if (data.heatmap) {
+            // optional additional heatmap for faction panel
+            const canvas = this.shadow.querySelector("#heatmap-faction");
+            if (canvas) this.drawHeatmap(canvas, data.heatmap);
+        }
+    }
+
+
+/* ============================================================
+   FINAL UI CONSTRUCTION CALLS
+   ============================================================ */
+
+    finalizeUI() {
+        // Build Ask Colonel tab
+        this.buildColonelPanel();
+
+        // Build Settings
+        this.buildSettingsPanel();
+        this.attachSettingsLogic();
+    }
+
+
+/* ============================================================
+   EXTENDED CSS: TABLES, BADGES, BUTTONS, COLONEL PANEL, ETC.
+   ============================================================ */
+
+    applyExtendedStyles() {
+        if (!this.shadow) return;
+
+        const style = document.createElement("style");
+        style.textContent = `
+
+            /* Tables */
+            .nexus-table {
+                width: 100%;
+                border-collapse: collapse;
+                background: rgba(0,0,0,0.4);
+                font-size: 13px;
+            }
+            .nexus-table th {
+                background: #00222b;
+                color: #00eaff;
+                text-align: left;
+                padding: 4px;
+                position: sticky;
+                top: 0;
+                z-index: 5;
+            }
+            .nexus-table td {
+                padding: 4px;
+                border-bottom: 1px solid #00303a;
+                color: #cfeeff;
+            }
+            .nexus-table tr:hover {
+                background: rgba(0,255,255,0.06);
+            }
+
+            /* Badges */
+            .badge {
+                padding: 2px 6px;
+                border-radius: 4px;
+                font-size: 10px;
+                font-weight: bold;
+                color: #ffffff;
+                display: inline-block;
+                letter-spacing: 0.5px;
+                text-shadow: 0 0 4px currentColor;
+            }
+            .badge-ok { background: #005f73; color: #00eaff; }
+            .badge-off { background: #222; color: #888; }
+            .badge-hos { background: #7a0019; color: #ff1744; }
+            .badge-jail { background: #5f3b00; color: #ff9100; }
+            .badge-travel { background: #704800; color: #ffca28; }
+            .badge-lo { background: #003f5c; color: #a8dadc; }
+            .badge-med { background: #665191; color: #ffca28; }
+            .badge-hi { background: #bc5090; color: #ff6b6b; }
+            .badge-xtr { background: #ff0000; }
+            .badge-lv { background: #002b36; color: #00eaff; }
+            .badge-rank { background: #1a0033; color: #c77dff; }
+
+            /* Online dots */
+            .dot {
+                width: 12px;
+                height: 12px;
+                border-radius: 50%;
+                display: inline-block;
+                box-shadow: 0 0 6px currentColor;
+            }
+            .dot-on { background: #00ff44; color: #00ff44; }
+            .dot-recent { background: #ffd54f; color: #ffd54f; }
+            .dot-danger { background: #ff0033; color: #ff0033; }
+            .dot-off { background: #555; color: #555; }
+
+            /* Inline overlay controls */
+            .nexus-inline-buttons {
+                display: inline-flex;
+                gap: 4px;
+                margin-left: 6px;
+            }
+            .nib {
+                cursor: pointer;
+                font-size: 12px;
+                padding: 1px 4px;
+                background: #001f28;
+                border: 1px solid #00eaff;
+                border-radius: 4px;
+                color: #00eaff;
+                transition: 0.15s ease;
+            }
+            .nib:hover {
+                background: #00303d;
+                transform: scale(1.15);
+            }
+
+            /* Colonel panel */
+            #panel-colonel .tile {
+                display: flex;
+                flex-direction: column;
+            }
+            .col-msgs {
+                background: #001015;
+                border: 1px solid #003f4f;
+                height: 200px;
+                overflow-y: auto;
+                padding: 8px;
+                margin-bottom: 8px;
+            }
+            .col-msg {
+                padding: 6px;
+                margin-bottom: 6px;
+                border-radius: 4px;
+                font-size: 12px;
+                line-height: 1.3;
+            }
+            .col-reply { background: #00252d; color: #00eaff; }
+            .col-user  { background: #003f22; color: #66ff66; }
+
+            #col-input {
+                padding: 6px;
+                background: #00161b;
+                border: 1px solid #005a6b;
+                color: white;
+                margin-bottom: 6px;
+                border-radius: 4px;
+            }
+            #col-send {
+                background: #003542;
+                color: #00eaff;
+                padding: 6px;
+                border: 1px solid #0099bb;
+                border-radius: 4px;
+                cursor: pointer;
+            }
+            #col-send:hover {
+                background: #005a75;
+            }
+
+            /* Chain log */
+            .chain-log {
+                max-height: 200px;
+                overflow-y: auto;
+            }
+            .chain-log-entry {
+                padding: 4px;
+                border-bottom: 1px solid #00303a;
+                display: flex;
+                justify-content: space-between;
+            }
+            .chain-log-entry .time {
+                color: #7fdfff;
+                font-size: 11px;
+            }
+
+        `;
+
+        this.shadow.appendChild(style);
+    }
+
+
+/* ============================================================
+   FINAL INITIALIZATION CALL (Trigger after all UI built)
+   ============================================================ */
+
+    buildTabs() {
+        if (!this.tabsContainer) return;
+
+        // existing tab code remains same…
+        this.tabsContainer.innerHTML = `
+            <button class="nexus-tab" data-tab="main">Main</button>
+            <button class="nexus-tab" data-tab="chain">Chain</button>
+            <button class="nexus-tab" data-tab="faction">Faction</button>
+            <button class="nexus-tab" data-tab="enemy">Enemies</button>
+            <button class="nexus-tab" data-tab="targets">Targets</button>
+            <button class="nexus-tab" data-tab="colonel">Ask Colonel</button>
+            <button class="nexus-tab" data-tab="settings">Settings</button>
+        `;
+
+        const btns = this.tabsContainer.querySelectorAll(".nexus-tab");
+        btns.forEach(b => {
+            b.addEventListener("click", () => {
+                this.activeTab = b.dataset.tab;
+                this.renderActivePanel();
+            });
+        });
+
+        // After tabs are created and clickable, ensure extended CSS + additional panels load:
+        this.applyExtendedStyles();
+        this.finalizeUI();
+    }
+} 
 })();
