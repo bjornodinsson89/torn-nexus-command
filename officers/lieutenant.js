@@ -1,103 +1,85 @@
 /***************************************************
- * WAR_LIEUTENANT v2.2 (Final Deployment Build)
- * Role: Reconnaissance Officer
- * Responsibilities:
- *    • Poll Torn API (via General)
- *    • Deliver RAW_INTEL
- *    • Adaptive polling (peace / chain / panic)
- *    • Persistent chain memory
+ * WAR_LIEUTENANT v2.2 (Final Fixed)
  ***************************************************/
 
 (function() {
-
     const Lieutenant = {
         general: null,
         intervals: [],
         listeners: [],
         memoryKey: "lieutenant_chain_memory_v22",
-
-        memory: {
-            active: false,
-            hits: 0,
-            timeLeft: 0,
-            chainID: 0,
-            lastUpdate: 0,
-            paceHistory: []
-        },
+        memory: { active: false, hits: 0, timeLeft: 0, lastUpdate: 0, paceHistory: [] },
+        failCount: 0,
 
         init(General) {
             this.cleanup();
             this.general = General;
-
             this.loadMemory();
             this.registerListeners();
             this.startPolling();
-
             console.log("%c[Lieutenant v2.2] Recon Online", "color:#4cf");
         },
 
         cleanup() {
             this.intervals.forEach(id => clearInterval(id));
+            this.listeners.forEach(unsub => unsub?.());
             this.intervals = [];
-
-            if (this.listeners.length) {
-                this.listeners.forEach(unsub => { try { unsub(); } catch {} });
-                this.listeners = [];
-            }
+            this.listeners = [];
         },
 
         registerListeners() {
-            const unsub = this.general.signals.listen("RAW_INTEL", intel => {
+            this.listeners.push(this.general.signals.listen("RAW_INTEL", intel => {
+                if (intel?._processed) return;
                 this.ingest(intel);
-            });
-            this.listeners.push(unsub);
+            }));
         },
 
         startPolling() {
-            const id = setInterval(() => {
+            this.intervals.push(setInterval(() => {
                 if (!this.general.intel.hasCredentials()) return;
                 this.poll();
-            }, 1000);
-
-            this.intervals.push(id);
+            }, 1000));
         },
 
         poll() {
             const wait = this.pollRate();
             if (!this._tick) this._tick = 0;
             this._tick++;
-
             if (this._tick < wait) return;
             this._tick = 0;
 
             this.general.intel.request({
                 normalize: true,
-                selections: ["basic","bars","chain","faction","profile"]
+                selections: ["chain", "faction", "war", "profile"]
             }).then(intel => {
+                intel._processed = true;
                 this.general.signals.dispatch("RAW_INTEL", intel);
-            }).catch(()=>{});
+                this.failCount = 0;
+            }).catch(() => {
+                this.failCount++;
+                if (this.failCount > 3) setTimeout(() => this.failCount = 0, 60000);
+            });
         },
 
         pollRate() {
-            if (this.memory.timeLeft < 50 && this.memory.active) return 1;  
-            if (this.memory.active) return 3;       
-            return 15;                                
+            if (this.memory.timeLeft < 50 && this.memory.active) return 1;
+            if (this.memory.active) return 3;
+            return 15;
         },
 
         ingest(intel) {
-            if (!intel || !intel.chain) return;
-
+            if (!intel?.chain) return;
             const c = intel.chain;
             this.memory.active = c.current > 0;
             this.memory.hits = c.current;
             this.memory.timeLeft = c.timeout;
             this.memory.lastUpdate = Date.now();
 
-            if (!this.memory.paceHistory) this.memory.paceHistory = [];
-            this.memory.paceHistory.push({time: Date.now(), hits: 1});
-
+            this.memory.paceHistory = this.memory.paceHistory || [];
+            this.memory.paceHistory.push({ time: Date.now(), hits: 1 });
             const cutoff = Date.now() - 60000;
             this.memory.paceHistory = this.memory.paceHistory.filter(p => p.time > cutoff);
+            if (this.memory.paceHistory.length > 100) this.memory.paceHistory.shift();
 
             this.saveMemory();
         },
@@ -110,12 +92,11 @@
         },
 
         saveMemory() {
-            try { 
-                localStorage.setItem(this.memoryKey, JSON.stringify(this.memory)); 
+            try {
+                localStorage.setItem(this.memoryKey, JSON.stringify(this.memory));
             } catch {}
         }
     };
 
-    if (window.WAR_GENERAL) WAR_GENERAL.register("Lieutenant", Lieutenant);
-
+    if (window.WAR_GENERAL) window.WAR_GENERAL.register("Lieutenant", Lieutenant);
 })();
