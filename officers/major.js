@@ -1,27 +1,8 @@
-/********************************************************************
- * MAJOR v8.0 "BLACK OPS" // FORCE UPDATE EDITION — FULLY FIXED & COMPLETE
- ********************************************************************/
+// === MAJOR — NEXUS BLACK OPS (FINAL) ===
 
 (function() {
 "use strict";
 
-console.log("Attempting to load V8.0...");
-
-/* ============================================================
-   NUCLEAR CLEANUP (Kills the old Blue UI)
-   ============================================================ */
-function nukeOldVersions() {
-    const oldUI = document.querySelectorAll("#nexus-major-host, #nexus-container");
-    if(oldUI.length > 0) {
-        console.log("[MAJOR] Found old versions. Nuking...");
-        oldUI.forEach(el => el.remove());
-    }
-}
-nukeOldVersions();
-
-/* ============================================================
-   MAJOR CLASS — MOVED TO TOP-LEVEL (FIX #2)
-   ============================================================ */
 class Major {
     constructor() {
         this.general = null;
@@ -35,12 +16,11 @@ class Major {
         this._isDragging = false;
         this.dragOffsetX = 0;
         this.dragOffsetY = 0;
-        this.activeTab = "overview"; 
-        this.targetSubTab = "personal"; 
+        this.activeTab = "overview";
+        this.targetSubTab = "personal";
         this.factionSort = { key: 'level', dir: 'desc' };
         this.mutationObserver = null;
         this.intervals = [];
-
         this.store = {
             user: null,
             chain: null,
@@ -52,30 +32,22 @@ class Major {
     }
 
     init(General) {
-        nukeOldVersions();
         this.general = General;
         this.createHost();
         this.renderBaseHTML();
-        this.applyStyles(); 
+        this.applyStyles();
         this.attachButtonLogic();
         this.attachDragLogic();
         this.attachResizeObserver();
         this.startInlineScanner();
-        this.startSitrepRouter();
+        this.bindSignals();
 
         const savedSide = localStorage.getItem("nexus_drawer_side");
-        if(savedSide) {
-            this.drawerSide = savedSide;
-            this.updateDrawerSide();
-        }
+        if(savedSide) this.drawerSide = savedSide;
 
+        this.updateDrawerSide();
         this.buildColonelPanel();
         this.renderActivePanel();
-
-        if (this.general?.signals) {
-            this.general.signals.dispatch("UI_READY", {});
-            this.general.signals.dispatch("MAJOR_READY", { version: "8.0" });
-        }
     }
 
     destroy() {
@@ -84,13 +56,44 @@ class Major {
         if (this.host?.parentNode) this.host.remove();
     }
 
+    bindSignals() {
+        this.general.signals.listen("SITREP_UPDATE", d => {
+            if(d.user) this.store.user = d.user;
+            if(d.chain) this.store.chain = d.chain;
+            if(d.factionMembers) this.store.faction = d.factionMembers;
+            if(d.enemyFactionMembers) this.store.enemies = d.enemyFactionMembers;
+            if(d.targets) this.store.targets = d.targets;
+            if(this.activeTab === "overview" && d.user) this.renderOverview();
+            if(this.activeTab === "chain" && d.chain) this.renderChain();
+            if(this.activeTab === "faction" && d.factionMembers) this.renderFaction();
+            if(this.activeTab === "enemy" && d.enemyFactionMembers) this.renderEnemies();
+            if(this.activeTab === "targets") this.renderTargets();
+        });
+
+        this.general.signals.listen("MAJOR_SHARED_TARGETS", d => {
+            this.store.targets.shared = d.shared || [];
+            if(this.activeTab === "targets") this.renderTargets();
+        });
+
+        this.general.signals.listen("ASK_COLONEL_RESPONSE", d => {
+            const win = this.shadow.querySelector("#col-msgs");
+            if(win && d.answer) {
+                const div = document.createElement("div");
+                div.className = "msg msg-ai";
+                div.textContent = "[AI] " + d.answer;
+                win.appendChild(div);
+                win.scrollTop = win.scrollHeight;
+            }
+        });
+    }
+
     createHost() {
         if (document.getElementById("nexus-major-host")) return;
         this.host = document.createElement("div");
         this.host.id = "nexus-major-host";
         this.host.style.position = "fixed";
-        this.host.style.zIndex = "2147483647"; 
-        this.host.style.top = "0"; 
+        this.host.style.zIndex = "2147483647";
+        this.host.style.top = "0";
         this.host.style.left = "0";
         this.shadow = this.host.attachShadow({ mode: "open" });
         document.body.appendChild(this.host);
@@ -129,9 +132,10 @@ class Major {
                 </div>
             </div>
         `;
+
         this.drawerEl = this.shadow.querySelector("#nexus-drawer");
         this.buttonEl = this.shadow.querySelector("#nexus-toggle");
-        
+
         this.shadow.querySelectorAll(".nexus-tab").forEach(btn => {
             btn.addEventListener("click", () => {
                 this.shadow.querySelectorAll(".nexus-tab").forEach(b => b.classList.remove("active"));
@@ -140,6 +144,7 @@ class Major {
                 this.renderActivePanel();
             });
         });
+
         this.shadow.querySelector("#close-drawer").addEventListener("click", () => this.toggleDrawer());
         this.buildSettingsPanel();
     }
@@ -147,9 +152,9 @@ class Major {
     applyStyles() {
         const style = document.createElement("style");
         style.textContent = `
-            :host { all: initial; font-family: 'Segoe UI', Roboto, sans-serif; --c-neon: #00f3ff; --c-alert: #ff003c; --c-bg: #050505; --c-panel: rgba(20, 25, 30, 0.95); }
+            :host { all: initial; font-family: 'Segoe UI', Roboto, sans-serif; --c-neon: #00f3ff; --c-alert: #ff003c; --c-bg: #050505; --c-panel: rgba(20,25,30,0.95); }
             * { box-sizing: border-box; }
-            #nexus-drawer { position: fixed; top: 0; width: 420px; height: 100vh; background: var(--c-bg); border-right: 2px solid var(--c-neon); transform: translateX(-100%); transition: transform 0.25s ease; display: flex; flex-direction: column; box-shadow: 0 0 40px rgba(0, 243, 255, 0.1); z-index: 10000; }
+            #nexus-drawer { position: fixed; top: 0; width: 420px; height: 100vh; background: var(--c-bg); border-right: 2px solid var(--c-neon); transform: translateX(-100%); transition: transform 0.25s ease; display: flex; flex-direction: column; box-shadow: 0 0 40px rgba(0,243,255,0.1); z-index: 10000; }
             #nexus-drawer.right { border-right: none; border-left: 2px solid var(--c-neon); transform: translateX(100%); }
             .drawer-open-left { transform: translateX(0) !important; }
             .drawer-open-right { transform: translateX(0) !important; }
@@ -163,7 +168,7 @@ class Major {
             #nexus-panels { flex: 1; overflow-y: auto; padding: 15px; position: relative; }
             .panel { display: none; animation: fadeIn 0.3s ease; }
             .panel.active { display: block; }
-            @keyframes fadeIn { from { opacity:0; transform:translateY(5px); } to { opacity:1; transform:translateY(0); } }
+            @keyframes fadeIn { from { opacity:0; transform:translateY(5px);} to { opacity:1; transform:translateY(0);} }
             .tile { background: linear-gradient(135deg, rgba(20,20,20,0.8) 0%, rgba(10,10,10,0.9) 100%); border: 1px solid #333; border-left: 3px solid #333; margin-bottom: 12px; padding: 12px; position: relative; }
             .tile:hover { border-left-color: var(--c-neon); box-shadow: 0 0 15px rgba(0,0,0,0.5); }
             .tile h3 { margin: 0 0 10px 0; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #888; border-bottom: 1px solid #222; padding-bottom: 4px; }
@@ -211,12 +216,14 @@ class Major {
         const p = this.shadow.querySelector("#panel-overview");
         const u = this.store.user;
         if(!u || !p) return;
+        const threatColor = u.ai?.threat > 0.5 ? 'var(--c-alert)' : 'var(--c-neon)';
+        const threatValue = Math.round((u.ai?.threat || 0) * 100);
         p.innerHTML = `
             <div class="tile">
                 <h3>OPERATOR: <span style="color:#fff">${this.sanitize(u.name)}</span></h3>
                 <div class="grid-2">
                     <div class="stat-box"><div class="stat-val">${u.level}</div><div class="stat-lbl">LEVEL</div></div>
-                    <div class="stat-box"><div class="stat-val" style="color:\( {u.hp<u.max_hp?'#f55':'#5f5'}"> \){u.hp}/${u.max_hp}</div><div class="stat-lbl">HEALTH</div></div>
+                    <div class="stat-box"><div class="stat-val" style="color:${(u.hp<u.max_hp)?'#f55':'#5f5'}">${u.hp}/${u.max_hp}</div><div class="stat-lbl">HEALTH</div></div>
                     <div class="stat-box"><div class="stat-val">${u.energy}</div><div class="stat-lbl">ENERGY</div></div>
                     <div class="stat-box"><div class="stat-val">${u.nerve}</div><div class="stat-lbl">NERVE</div></div>
                 </div>
@@ -224,10 +231,17 @@ class Major {
             </div>
             <div class="tile">
                 <h3>THREAT ASSESSMENT</h3>
-                 <div style="text-align:center; padding:5px;"><span style="font-size:20px; font-weight:bold; color:\( {u.threat>50? 'var(--c-alert)' : 'var(--c-neon)'}"> \){u.threat}%</span></div>
-                <div style="width:100%; background:#222; height:4px; margin-top:5px;"><div style="width:\( {u.threat}%; background: \){u.threat>50?'var(--c-alert)':'var(--c-neon)'}; height:100%;"></div></div>
+                <div style="text-align:center; padding:5px;">
+                    <span style="font-size:20px; font-weight:bold; color:${threatColor}">${threatValue}%</span>
+                </div>
+                <div style="width:100%; background:#222; height:4px; margin-top:5px;">
+                    <div style="width:${threatValue}%; background:${threatColor}; height:100%;"></div>
+                </div>
             </div>
-            <div class="tile"><h3>GLOBAL ACTIVITY</h3><canvas id="heatmap-cvs" width="350" height="60" style="width:100%; height:60px; image-rendering:pixelated;"></canvas></div>
+            <div class="tile">
+                <h3>GLOBAL ACTIVITY</h3>
+                <canvas id="heatmap-cvs" width="350" height="60" style="width:100%; height:60px; image-rendering:pixelated;"></canvas>
+            </div>
         `;
         if(this.store.heatmap) this.drawHeatmap(this.shadow.querySelector("#heatmap-cvs"), this.store.heatmap);
     }
@@ -239,8 +253,32 @@ class Major {
         const k = this.factionSort.key;
         const d = this.factionSort.dir === 'asc' ? 1 : -1;
         members.sort((a,b) => (a[k] > b[k] ? d : -d));
-        const rows = members.map(m => `<tr><td>\( {this.renderOnlineDot(m.onlineState)}</td><td style="color:#fff; font-weight:600;"> \){this.sanitize(m.name)}</td><td>\( {m.level}</td><td> \){this.renderStatusBadge(m.status)}</td><td>${m.days ?? '-'}</td></tr>`).join("");
-        p.innerHTML = `<div class="tile"><h3>ROSTER (\( {members.length})</h3><table class="nexus-table"><thead><tr><th width="20">●</th><th data-sort="name">NAME</th><th data-sort="level">LVL</th><th data-sort="status">STS</th><th data-sort="days">DAY</th></tr></thead><tbody> \){rows}</tbody></table></div>`;
+        const rows = members.map(m => `
+            <tr>
+                <td>${this.renderOnlineDot(m.onlineState)}</td>
+                <td style="color:#fff; font-weight:600;">${this.sanitize(m.name)}</td>
+                <td>${m.level}</td>
+                <td>${this.renderStatusBadge(m.status)}</td>
+                <td>${m.days ?? '-'}</td>
+            </tr>
+        `).join("");
+        p.innerHTML = `
+            <div class="tile">
+                <h3>ROSTER (${members.length})</h3>
+                <table class="nexus-table">
+                    <thead>
+                        <tr>
+                            <th width="20">●</th>
+                            <th data-sort="name">NAME</th>
+                            <th data-sort="level">LVL</th>
+                            <th data-sort="status">STS</th>
+                            <th data-sort="days">DAY</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
+        `;
         p.querySelectorAll("th[data-sort]").forEach(th => {
             th.addEventListener("click", () => {
                 const key = th.dataset.sort;
@@ -255,8 +293,27 @@ class Major {
         const p = this.shadow.querySelector("#panel-enemy");
         const list = this.store.enemies || [];
         if(list.length === 0) { p.innerHTML = `<div class="loader-text">NO HOSTILES DETECTED</div>`; return; }
-        const rows = list.map(m => `<tr><td>\( {this.renderOnlineDot(m.onlineState)}</td><td style="color:#fff"> \){this.sanitize(m.name)}</td><td>\( {m.level}</td><td> \){this.renderStatusBadge(m.status)}</td><td style="text-align:right"><span class="act-btn act-att" data-id="\( {m.id}">Attack</span><span class="act-btn act-spy" data-id=" \){m.id}">Spy</span></td></tr>`).join("");
-        p.innerHTML = `<div class="tile"><h3>HOSTILE FORCES</h3><table class="nexus-table"><thead><tr><th>●</th><th>NAME</th><th>LVL</th><th>STS</th><th style="text-align:right">ACT</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+        const rows = list.map(m => `
+            <tr>
+                <td>${this.renderOnlineDot(m.onlineState)}</td>
+                <td style="color:#fff">${this.sanitize(m.name)}</td>
+                <td>${m.level}</td>
+                <td>${this.renderStatusBadge(m.status)}</td>
+                <td style="text-align:right">
+                    <span class="act-btn act-att" data-id="${m.id}">Attack</span>
+                </td>
+            </tr>`).join("");
+        p.innerHTML = `
+            <div class="tile">
+                <h3>HOSTILE FORCES</h3>
+                <table class="nexus-table">
+                    <thead>
+                        <tr><th>●</th><th>NAME</th><th>LVL</th><th>STS</th><th style="text-align:right">ACT</th></tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
+        `;
         this.attachActionListeners(p);
     }
 
@@ -266,9 +323,33 @@ class Major {
         if(!c) { p.innerHTML = `<div class="loader-text">CHAIN INACTIVE</div>`; return; }
         const time = c.timeLeft || 0;
         const isCrit = time < 90;
-        p.innerHTML = `<div class="tile" style="border-color:\( {isCrit ? 'var(--c-alert)' : '#333'}"><h3>CHAIN STATUS</h3><div class="grid-2"><div class="stat-box"><div class="stat-val" style="color:var(--c-neon)"> \){c.hits}</div><div class="stat-lbl">COUNT</div></div><div class="stat-box"><div class="stat-val" style="color:\( {isCrit?'var(--c-alert)':'#fff'}"> \){time}s</div><div class="stat-lbl">TIMEOUT</div></div></div>${isCrit ? `<div style="background:var(--c-alert); color:#000; text-align:center; font-weight:bold; margin-top:5px; animation:pulse 0.5s infinite">TIMEOUT IMMINENT</div>` : ''}</div><div class="tile"><h3>RECENT HITS</h3><div id="chain-log" style="font-size:10px; color:#888;"></div></div>`;
+        p.innerHTML = `
+            <div class="tile" style="border-color:${isCrit ? 'var(--c-alert)' : '#333'}">
+                <h3>CHAIN STATUS</h3>
+                <div class="grid-2">
+                    <div class="stat-box">
+                        <div class="stat-val" style="color:var(--c-neon)">${c.hits}</div>
+                        <div class="stat-lbl">COUNT</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-val" style="color:${isCrit?'var(--c-alert)':'#fff'}">${time}s</div>
+                        <div class="stat-lbl">TIMEOUT</div>
+                    </div>
+                </div>
+                ${isCrit ? `<div style="background:var(--c-alert); color:#000; text-align:center; font-weight:bold; margin-top:5px; animation:pulse 0.5s infinite">TIMEOUT IMMINENT</div>` : ''}
+            </div>
+            <div class="tile">
+                <h3>RECENT HITS</h3>
+                <div id="chain-log" style="font-size:10px; color:#888;"></div>
+            </div>
+        `;
         if(c.log && c.log.length) {
-            const logHTML = c.log.slice(0, 10).map(l => `<div style="border-bottom:1px solid #222; padding:2px;"><span style="color:#fff">\( {l.player}</span> hit for <span style="color:var(--c-neon)"> \){l.respect}</span></div>`).join("");
+            const logHTML = c.log.slice(0, 10).map(l => `
+                <div style="border-bottom:1px solid #222; padding:2px;">
+                    <span style="color:#fff">${this.sanitize(l.player)}</span>
+                    hit for <span style="color:var(--c-neon)">${l.respect}</span>
+                </div>
+            `).join("");
             p.querySelector("#chain-log").innerHTML = logHTML;
         }
     }
@@ -277,31 +358,73 @@ class Major {
         const p = this.shadow.querySelector("#panel-targets");
         if(!p) return;
         const sub = this.targetSubTab;
-        const btnStyle = (key) => `flex:1; background:\( {sub===key?'var(--c-neon)':'#111'}; color: \){sub===key?'#000':'#888'}; border:1px solid #333; cursor:pointer; padding:5px; font-weight:bold;`;
-        p.innerHTML = `<div style="display:flex; gap:5px; margin-bottom:10px;"><button class="t-sub" data-key="personal" style="\( {btnStyle('personal')}">PERSONAL</button><button class="t-sub" data-key="war" style=" \){btnStyle('war')}">WAR</button><button class="t-sub" data-key="shared" style="${btnStyle('shared')}">SHARED</button></div><div id="target-list"></div>`;
+        const btnStyle = key => `flex:1; background:${sub===key?'var(--c-neon)':'#111'}; color:${sub===key?'#000':'#888'}; border:1px solid #333; cursor:pointer; padding:5px; font-weight:bold;`;
+
+        p.innerHTML = `
+            <div style="display:flex; gap:5px; margin-bottom:10px;">
+                <button class="t-sub" data-key="personal" style="${btnStyle('personal')}">PERSONAL</button>
+                <button class="t-sub" data-key="war" style="${btnStyle('war')}">WAR</button>
+                <button class="t-sub" data-key="shared" style="${btnStyle('shared')}">SHARED</button>
+            </div>
+            <div id="target-list"></div>
+        `;
+
+        p.querySelectorAll(".t-sub").forEach(b => {
+            b.addEventListener("click", () => {
+                this.targetSubTab = b.dataset.key;
+                this.renderTargets();
+            });
+        });
+
         const list = this.store.targets[sub] || [];
         const container = p.querySelector("#target-list");
-        p.querySelectorAll(".t-sub").forEach(b => { 
-            b.addEventListener("click", () => { this.targetSubTab = b.dataset.key; this.renderTargets(); }); 
-        });
         if(!list.length) { container.innerHTML = `<div class="loader-text">NO TARGETS</div>`; return; }
-        const rows = list.map(t => `<tr><td>\( {this.renderOnlineDot(t.onlineState)}</td><td style="color:#fff"> \){this.sanitize(t.name)}</td><td>\( {t.level}</td><td> \){this.renderStatusBadge(t.status)}</td><td style="text-align:right"><span class="act-btn act-att" data-id="${t.id}">Attack</span></td></tr>`).join("");
-        container.innerHTML = `<table class="nexus-table"><thead><tr><th>●</th><th>NAME</th><th>LVL</th><th>STS</th><th>ACT</th></tr></thead><tbody>${rows}</tbody></table>`;
+
+        const rows = list.map(t => `
+            <tr>
+                <td>${this.renderOnlineDot(t.onlineState)}</td>
+                <td style="color:#fff">${this.sanitize(t.name)}</td>
+                <td>${t.level}</td>
+                <td>${this.renderStatusBadge(t.status)}</td>
+                <td style="text-align:right">
+                    <span class="act-btn act-att" data-id="${t.id}">Attack</span>
+                </td>
+            </tr>`).join("");
+
+        container.innerHTML = `
+            <table class="nexus-table">
+                <thead><tr><th>●</th><th>NAME</th><th>LVL</th><th>STS</th><th>ACT</th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+        `;
+
         this.attachActionListeners(container);
     }
 
     buildColonelPanel() {
         const p = this.shadow.querySelector("#panel-colonel");
         if(!p) return;
-        p.innerHTML = `<div class="tile"><h3>TACTICAL AI UPLINK</h3><div class="chat-win" id="col-msgs"><div class="msg msg-ai">[AI] Systems online. Ready for query.</div></div><input type="text" id="col-input" class="chat-input" placeholder="Enter command..."></div>`;
+        p.innerHTML = `
+            <div class="tile">
+                <h3>TACTICAL AI UPLINK</h3>
+                <div class="chat-win" id="col-msgs">
+                    <div class="msg msg-ai">[AI] Systems online. Ready for query.</div>
+                </div>
+                <input type="text" id="col-input" class="chat-input" placeholder="Enter command...">
+            </div>
+        `;
         const input = p.querySelector("#col-input");
         const win = p.querySelector("#col-msgs");
-        input.addEventListener("keydown", (e) => {
+        input.addEventListener("keydown", e => {
             if(e.key === "Enter" && input.value.trim() !== "") {
                 const txt = input.value.trim();
-                const uDiv = document.createElement("div"); uDiv.className = "msg msg-user"; uDiv.textContent = txt; win.appendChild(uDiv);
-                this.general?.signals?.dispatch("ASK_COLONEL", { question: txt });
-                input.value = ""; win.scrollTop = win.scrollHeight;
+                const uDiv = document.createElement("div");
+                uDiv.className = "msg msg-user";
+                uDiv.textContent = txt;
+                win.appendChild(uDiv);
+                this.general.signals.dispatch("ASK_COLONEL", { question: txt });
+                input.value = "";
+                win.scrollTop = win.scrollHeight;
             }
         });
     }
@@ -309,147 +432,153 @@ class Major {
     buildSettingsPanel() {
         const p = this.shadow.querySelector("#panel-settings");
         if(!p) return;
-        p.innerHTML = `<div class="tile"><h3>CONFIG</h3><label style="color:#ccc; display:block;">Dock Side<select id="set-side" style="float:right; background:#000; color:var(--c-neon); border:1px solid #333;"><option value="left">Left</option><option value="right">Right</option></select></label></div>`;
+        p.innerHTML = `
+            <div class="tile">
+                <h3>CONFIG</h3>
+                <label style="color:#ccc; display:block;">
+                    Dock Side
+                    <select id="set-side" style="float:right; background:#000; color:var(--c-neon); border:1px solid #333;">
+                        <option value="left">Left</option>
+                        <option value="right">Right</option>
+                    </select>
+                </label>
+            </div>
+        `;
         const sel = p.querySelector("#set-side");
         sel.value = this.drawerSide;
-        sel.addEventListener("change", () => { this.drawerSide = sel.value; localStorage.setItem("nexus_drawer_side", sel.value); this.updateDrawerSide(); });
-    }
-
-    startSitrepRouter() {
-        if(!this.general?.signals) return;
-        this.general.signals.listen("SITREP_UPDATE", d => {
-            if(d.user) this.store.user = d.user;
-            if(d.chain) this.store.chain = d.chain;
-            if(d.factionMembers) this.store.faction = d.factionMembers;
-            if(d.enemyFactionMembers) this.store.enemies = d.enemyFactionMembers;
-            if(d.targets) this.store.targets = d.targets;
-            
-            if(this.activeTab === "overview" && d.user) this.renderOverview();
-            if(this.activeTab === "chain" && d.chain) this.renderChain();
-            if(this.activeTab === "faction" && d.factionMembers) this.renderFaction();
-            if(this.activeTab === "enemy" && d.enemyFactionMembers) this.renderEnemies();
-        });
-        this.general.signals.listen("GLOBAL_SITREP_READY", d => { 
-            if(d.heatmap) { this.store.heatmap = d.heatmap; if(this.activeTab === "overview") this.renderOverview(); } 
-        });
-        this.general.signals.listen("ASK_COLONEL_RESPONSE", d => {
-            const win = this.shadow.querySelector("#col-msgs");
-            if(win && d.answer) { 
-                const div = document.createElement("div"); 
-                div.className = "msg msg-ai"; 
-                div.textContent = "[AI] " + d.answer; 
-                win.appendChild(div); 
-                win.scrollTop = win.scrollHeight; 
-            }
+        sel.addEventListener("change", () => {
+            this.drawerSide = sel.value;
+            localStorage.setItem("nexus_drawer_side", sel.value);
+            this.updateDrawerSide();
         });
     }
 
-    sanitize(s) { const d=document.createElement('div'); d.textContent=String(s||""); return d.innerHTML; }
-    renderStatusBadge(st) { const s = (st||"").toLowerCase(); if(s.includes("hosp")) return `<span class="badge badge-hos">HOSP</span>`; if(s.includes("jail")) return `<span class="badge badge-hos">JAIL</span>`; if(s.includes("travel")) return `<span class="badge badge-travel">FLY</span>`; return `<span class="badge badge-ok">OK</span>`; }
-    renderOnlineDot(st) { return `<span style="color:${st==='online'?'#0f0':'#444'}; font-size:14px;">●</span>`; }
-    drawHeatmap(canvas, data) { 
-        const ctx = canvas.getContext("2d"); 
-        const w = canvas.width, h = canvas.height; 
-        ctx.clearRect(0,0,w,h); 
-        const bw = w / data.length; 
-        const max = Math.max(...data, 1); 
-        data.forEach((val, i) => { 
-            const hPct = val / max; 
-            ctx.fillStyle = `rgba(0, 243, 255, ${Math.max(0.1, hPct)})`; 
-            ctx.fillRect(i*bw, h-(h*hPct), bw, h*hPct); 
-        }); 
+    attachActionListeners(root) {
+        root.querySelectorAll(".act-att").forEach(b => {
+            b.addEventListener("click", () => window.location.href = `/loader.php?sid=attack&user2ID=${b.dataset.id}`);
+        });
     }
-    attachActionListeners(root) { 
-        root.querySelectorAll(".act-att").forEach(b => { 
-            b.addEventListener("click", () => window.location.href = `/loader.php?sid=attack&user2ID=${b.dataset.id}`); 
-        }); 
-        root.querySelectorAll(".act-spy").forEach(b => { 
-            b.addEventListener("click", () => this.general.signals.dispatch("REQUEST_PLAYER_SITREP", { id: b.dataset.id })); 
-        }); 
+
+    sanitize(s) {
+        const d=document.createElement('div');
+        d.textContent=String(s||"");
+        return d.innerHTML;
     }
-    toggleDrawer() { this.drawerOpen = !this.drawerOpen; this.updateDrawerSide(); }
-    updateDrawerSide() { 
-        const cls = this.drawerSide === "right" 
-            ? (this.drawerOpen ? "drawer-open-right" : "") + " right" 
-            : (this.drawerOpen ? "drawer-open-left" : ""); 
-        this.drawerEl.className = cls; 
+
+    renderStatusBadge(st) {
+        const s = (st||"").toLowerCase();
+        if(s.includes("hosp")) return `<span class="badge badge-hos">HOSP</span>`;
+        if(s.includes("jail")) return `<span class="badge badge-hos">JAIL</span>`;
+        if(s.includes("travel")) return `<span class="badge badge-travel">FLY</span>`;
+        return `<span class="badge badge-ok">OK</span>`;
     }
+
+    renderOnlineDot(st) {
+        return `<span style="color:${st==='online'?'#0f0':'#444'}; font-size:14px;">●</span>`;
+    }
+
+    attachButtonLogic() {
+        this.buttonEl.addEventListener("click", () => {
+            if(!this._isDragging) this.toggleDrawer();
+        });
+    }
+
+    toggleDrawer() {
+        this.drawerOpen = !this.drawerOpen;
+        this.updateDrawerSide();
+    }
+
+    updateDrawerSide() {
+        if (this.drawerSide === "right") {
+            this.drawerEl.className = this.drawerOpen ? "drawer-open-right right" : "right";
+        } else {
+            this.drawerEl.className = this.drawerOpen ? "drawer-open-left" : "";
+        }
+    }
+
     attachDragLogic() {
         const btn = this.buttonEl;
-        const start = (e) => {
+        const start = e => {
             if(e.type==='mousedown' && e.button!==0) return;
-            e.preventDefault(); 
-            this.dragging = true; 
+            e.preventDefault();
+            this.dragging = true;
             this._isDragging = true;
             const t = e.touches ? e.touches[0] : e;
-            const r = btn.getBoundingClientRect(); 
-            this.dragOffsetX = t.clientX - r.left; 
+            const r = btn.getBoundingClientRect();
+            this.dragOffsetX = t.clientX - r.left;
             this.dragOffsetY = t.clientY - r.top;
-            const move = (ev) => { 
-                const p = ev.touches ? ev.touches[0] : ev; 
-                btn.style.left = (p.clientX - this.dragOffsetX)+"px"; 
-                btn.style.top = (p.clientY - this.dragOffsetY)+"px"; 
+
+            const move = ev => {
+                const p = ev.touches ? ev.touches[0] : ev;
+                btn.style.left = (p.clientX - this.dragOffsetX)+"px";
+                btn.style.top = (p.clientY - this.dragOffsetY)+"px";
             };
-            const stop = () => { 
-                this.dragging = false; 
-                setTimeout(() => this._isDragging = false, 100); 
-                window.removeEventListener("mousemove",move); 
-                window.removeEventListener("mouseup",stop); 
-                window.removeEventListener("touchmove",move); 
-                window.removeEventListener("touchend",stop); 
+
+            const stop = () => {
+                this.dragging = false;
+                setTimeout(() => this._isDragging = false, 100);
+                window.removeEventListener("mousemove",move);
+                window.removeEventListener("mouseup",stop);
+                window.removeEventListener("touchmove",move);
+                window.removeEventListener("touchend",stop);
             };
-            window.addEventListener("mousemove",move); 
-            window.addEventListener("mouseup",stop); 
-            window.addEventListener("touchmove",move,{passive:false}); 
+
+            window.addEventListener("mousemove",move);
+            window.addEventListener("mouseup",stop);
+            window.addEventListener("touchmove",move,{passive:false});
             window.addEventListener("touchend",stop);
         };
-        btn.addEventListener("mousedown",start); 
+
+        btn.addEventListener("mousedown",start);
         btn.addEventListener("touchstart",start,{passive:false});
     }
-    attachButtonLogic() { 
-        this.buttonEl.addEventListener("click", () => { if(!this._isDragging) this.toggleDrawer(); }); 
+
+    attachResizeObserver() {
+        window.addEventListener("resize", () => this.updateDrawerSide());
     }
-    attachResizeObserver() { 
-        window.addEventListener("resize", () => this.updateDrawerSide()); 
+
+    drawHeatmap(canvas, data) {
+        const ctx = canvas.getContext("2d");
+        const w = canvas.width, h = canvas.height;
+        ctx.clearRect(0,0,w,h);
+        const bw = w / data.length;
+        const max = Math.max(...data, 1);
+        data.forEach((val, i) => {
+            const hPct = val / max;
+            ctx.fillStyle = `rgba(0, 243, 255, ${Math.max(0.1, hPct)})`;
+            ctx.fillRect(i*bw, h-(h*hPct), bw, h*hPct);
+        });
     }
 
     startInlineScanner() {
-        const scan = () => { 
-            document.querySelectorAll("a[href*='profiles.php?XID=']").forEach(a => { 
-                if(a.dataset.nexus) return; 
-                const id = a.href.match(/XID=(\d+)/)?.[1]; 
-                if(id) { 
-                    a.dataset.nexus = "1"; 
-                    const s = document.createElement("span"); 
-                    s.innerHTML = `<span class="act-btn act-att" data-id="${id}" style="font-size:10px; margin-left:4px;">Attack</span>`; 
-                    a.after(s); 
-                    this.attachActionListeners(s); 
-                } 
-            }); 
+        const scan = () => {
+            document.querySelectorAll("a[href*='profiles.php?XID=']").forEach(a => {
+                if(a.dataset.nexus) return;
+                const id = a.href.match(/XID=(\d+)/)?.[1];
+                if(id) {
+                    a.dataset.nexus = "1";
+                    const s = document.createElement("span");
+                    s.innerHTML = `<span class="act-btn act-att" data-id="${id}" style="font-size:10px; margin-left:4px;">Attack</span>`;
+                    a.after(s);
+                    this.attachActionListeners(s);
+                }
+            });
         };
-        this.mutationObserver = new MutationObserver(scan); 
-        this.mutationObserver.observe(document.body, {childList:true, subtree:true}); 
+        this.mutationObserver = new MutationObserver(scan);
+        this.mutationObserver.observe(document.body, {childList:true, subtree:true});
         scan();
     }
 }
 
-/* ============================================================
-   SAFE BOOTSTRAP — REGISTER INSTANCE
-   ============================================================ */
 function waitForGeneral(attempt = 0) {
     if (window.WAR_GENERAL && typeof window.WAR_GENERAL.register === "function") {
-        console.log("%c[MAJOR] V8.0 CONNECTED.", "color: #00f3ff; background: #000; padding: 4px; font-weight:bold;");
         window.WAR_GENERAL.register("Major", new Major());
         return;
     }
-
     const delay = Math.min(1000, 100 * Math.pow(1.5, attempt));
-    if (attempt < 120) {
-        setTimeout(() => waitForGeneral(attempt + 1), delay);
-    } else {
-        console.error("[MAJOR] CONNECTION FAILED. WAR_GENERAL NOT FOUND.");
-    }
+    if (attempt < 120) setTimeout(() => waitForGeneral(attempt + 1), delay);
 }
+
 waitForGeneral();
 
 })();
