@@ -1,15 +1,11 @@
 /********************************************************************
- * MAJOR v8.0 "BLACK OPS" // FORCE UPDATE EDITION
+ * MAJOR v8.0 "BLACK OPS" // FORCE UPDATE EDITION — FULLY FIXED & COMPLETE
  ********************************************************************/
 
 (function() {
 "use strict";
 
-// --- DEBUG CHECK ---
-// If you don't see this alert, you are editing the wrong file!
 console.log("Attempting to load V8.0...");
-/ alert("V8.0 BLACK OPS CODE IS RUNNING"); // Uncomment this if you are really stuck
-// -------------------
 
 /* ============================================================
    NUCLEAR CLEANUP (Kills the old Blue UI)
@@ -24,29 +20,8 @@ function nukeOldVersions() {
 nukeOldVersions();
 
 /* ============================================================
-   SAFE BOOTSTRAP
+   MAJOR CLASS — MOVED TO TOP-LEVEL (FIX #2)
    ============================================================ */
-function waitForGeneral(attempt = 0) {
-    if (window.WAR_GENERAL && typeof window.WAR_GENERAL.register === "function") {
-        console.log("%c[MAJOR] V8.0 CONNECTED.", "color: #00f3ff; background: #000; padding: 4px; font-weight:bold;");
-        startMajor();
-        return;
-    }
-
-    const delay = Math.min(1000, 100 * Math.pow(1.5, attempt));
-    if (attempt < 120) {
-        setTimeout(() => waitForGeneral(attempt + 1), delay);
-    } else {
-        console.error("[MAJOR] CONNECTION FAILED. WAR_GENERAL NOT FOUND.");
-    }
-}
-waitForGeneral();
-
-/* ============================================================
-   START MAJOR
-   ============================================================ */
-function startMajor() {
-
 class Major {
     constructor() {
         this.general = null;
@@ -77,7 +52,7 @@ class Major {
     }
 
     init(General) {
-        nukeOldVersions(); // Run cleanup again just in case
+        nukeOldVersions();
         this.general = General;
         this.createHost();
         this.renderBaseHTML();
@@ -241,7 +216,7 @@ class Major {
                 <h3>OPERATOR: <span style="color:#fff">${this.sanitize(u.name)}</span></h3>
                 <div class="grid-2">
                     <div class="stat-box"><div class="stat-val">${u.level}</div><div class="stat-lbl">LEVEL</div></div>
-                    <div class="stat-box"><div class="stat-val" style="color:${u.hp<u.max_hp?'#f55':'#5f5'}">${u.hp}/${u.max_hp}</div><div class="stat-lbl">HEALTH</div></div>
+                    <div class="stat-box"><div class="stat-val" style="color:\( {u.hp<u.max_hp?'#f55':'#5f5'}"> \){u.hp}/${u.max_hp}</div><div class="stat-lbl">HEALTH</div></div>
                     <div class="stat-box"><div class="stat-val">${u.energy}</div><div class="stat-lbl">ENERGY</div></div>
                     <div class="stat-box"><div class="stat-val">${u.nerve}</div><div class="stat-lbl">NERVE</div></div>
                 </div>
@@ -249,8 +224,8 @@ class Major {
             </div>
             <div class="tile">
                 <h3>THREAT ASSESSMENT</h3>
-                 <div style="text-align:center; padding:5px;"><span style="font-size:20px; font-weight:bold; color:${u.threat>50? 'var(--c-alert)' : 'var(--c-neon)'}">${u.threat}%</span></div>
-                <div style="width:100%; background:#222; height:4px; margin-top:5px;"><div style="width:${u.threat}%; background:${u.threat>50?'var(--c-alert)':'var(--c-neon)'}; height:100%;"></div></div>
+                 <div style="text-align:center; padding:5px;"><span style="font-size:20px; font-weight:bold; color:\( {u.threat>50? 'var(--c-alert)' : 'var(--c-neon)'}"> \){u.threat}%</span></div>
+                <div style="width:100%; background:#222; height:4px; margin-top:5px;"><div style="width:\( {u.threat}%; background: \){u.threat>50?'var(--c-alert)':'var(--c-neon)'}; height:100%;"></div></div>
             </div>
             <div class="tile"><h3>GLOBAL ACTIVITY</h3><canvas id="heatmap-cvs" width="350" height="60" style="width:100%; height:60px; image-rendering:pixelated;"></canvas></div>
         `;
@@ -264,8 +239,8 @@ class Major {
         const k = this.factionSort.key;
         const d = this.factionSort.dir === 'asc' ? 1 : -1;
         members.sort((a,b) => (a[k] > b[k] ? d : -d));
-        const rows = members.map(m => `<tr><td>${this.renderOnlineDot(m.onlineState)}</td><td style="color:#fff; font-weight:600;">${this.sanitize(m.name)}</td><td>${m.level}</td><td>${this.renderStatusBadge(m.status)}</td><td>${m.days ?? '-'}</td></tr>`).join("");
-        p.innerHTML = `<div class="tile"><h3>ROSTER (${members.length})</h3><table class="nexus-table"><thead><tr><th width="20">●</th><th data-sort="name">NAME</th><th data-sort="level">LVL</th><th data-sort="status">STS</th><th data-sort="days">DAY</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+        const rows = members.map(m => `<tr><td>\( {this.renderOnlineDot(m.onlineState)}</td><td style="color:#fff; font-weight:600;"> \){this.sanitize(m.name)}</td><td>\( {m.level}</td><td> \){this.renderStatusBadge(m.status)}</td><td>${m.days ?? '-'}</td></tr>`).join("");
+        p.innerHTML = `<div class="tile"><h3>ROSTER (\( {members.length})</h3><table class="nexus-table"><thead><tr><th width="20">●</th><th data-sort="name">NAME</th><th data-sort="level">LVL</th><th data-sort="status">STS</th><th data-sort="days">DAY</th></tr></thead><tbody> \){rows}</tbody></table></div>`;
         p.querySelectorAll("th[data-sort]").forEach(th => {
             th.addEventListener("click", () => {
                 const key = th.dataset.sort;
@@ -280,7 +255,7 @@ class Major {
         const p = this.shadow.querySelector("#panel-enemy");
         const list = this.store.enemies || [];
         if(list.length === 0) { p.innerHTML = `<div class="loader-text">NO HOSTILES DETECTED</div>`; return; }
-        const rows = list.map(m => `<tr><td>${this.renderOnlineDot(m.onlineState)}</td><td style="color:#fff">${this.sanitize(m.name)}</td><td>${m.level}</td><td>${this.renderStatusBadge(m.status)}</td><td style="text-align:right"><span class="act-btn act-att" data-id="${m.id}">⚔</span><span class="act-btn act-spy" data-id="${m.id}">👁</span></td></tr>`).join("");
+        const rows = list.map(m => `<tr><td>\( {this.renderOnlineDot(m.onlineState)}</td><td style="color:#fff"> \){this.sanitize(m.name)}</td><td>\( {m.level}</td><td> \){this.renderStatusBadge(m.status)}</td><td style="text-align:right"><span class="act-btn act-att" data-id="\( {m.id}">Attack</span><span class="act-btn act-spy" data-id=" \){m.id}">Spy</span></td></tr>`).join("");
         p.innerHTML = `<div class="tile"><h3>HOSTILE FORCES</h3><table class="nexus-table"><thead><tr><th>●</th><th>NAME</th><th>LVL</th><th>STS</th><th style="text-align:right">ACT</th></tr></thead><tbody>${rows}</tbody></table></div>`;
         this.attachActionListeners(p);
     }
@@ -291,9 +266,9 @@ class Major {
         if(!c) { p.innerHTML = `<div class="loader-text">CHAIN INACTIVE</div>`; return; }
         const time = c.timeLeft || 0;
         const isCrit = time < 90;
-        p.innerHTML = `<div class="tile" style="border-color:${isCrit ? 'var(--c-alert)' : '#333'}"><h3>CHAIN STATUS</h3><div class="grid-2"><div class="stat-box"><div class="stat-val" style="color:var(--c-neon)">${c.hits}</div><div class="stat-lbl">COUNT</div></div><div class="stat-box"><div class="stat-val" style="color:${isCrit?'var(--c-alert)':'#fff'}">${time}s</div><div class="stat-lbl">TIMEOUT</div></div></div>${isCrit ? `<div style="background:var(--c-alert); color:#000; text-align:center; font-weight:bold; margin-top:5px; animation:pulse 0.5s infinite">TIMEOUT IMMINENT</div>` : ''}</div><div class="tile"><h3>RECENT HITS</h3><div id="chain-log" style="font-size:10px; color:#888;"></div></div>`;
+        p.innerHTML = `<div class="tile" style="border-color:\( {isCrit ? 'var(--c-alert)' : '#333'}"><h3>CHAIN STATUS</h3><div class="grid-2"><div class="stat-box"><div class="stat-val" style="color:var(--c-neon)"> \){c.hits}</div><div class="stat-lbl">COUNT</div></div><div class="stat-box"><div class="stat-val" style="color:\( {isCrit?'var(--c-alert)':'#fff'}"> \){time}s</div><div class="stat-lbl">TIMEOUT</div></div></div>${isCrit ? `<div style="background:var(--c-alert); color:#000; text-align:center; font-weight:bold; margin-top:5px; animation:pulse 0.5s infinite">TIMEOUT IMMINENT</div>` : ''}</div><div class="tile"><h3>RECENT HITS</h3><div id="chain-log" style="font-size:10px; color:#888;"></div></div>`;
         if(c.log && c.log.length) {
-            const logHTML = c.log.slice(0, 10).map(l => `<div style="border-bottom:1px solid #222; padding:2px;"><span style="color:#fff">${l.player}</span> hit for <span style="color:var(--c-neon)">${l.respect}</span></div>`).join("");
+            const logHTML = c.log.slice(0, 10).map(l => `<div style="border-bottom:1px solid #222; padding:2px;"><span style="color:#fff">\( {l.player}</span> hit for <span style="color:var(--c-neon)"> \){l.respect}</span></div>`).join("");
             p.querySelector("#chain-log").innerHTML = logHTML;
         }
     }
@@ -302,13 +277,15 @@ class Major {
         const p = this.shadow.querySelector("#panel-targets");
         if(!p) return;
         const sub = this.targetSubTab;
-        const btnStyle = (key) => `flex:1; background:${sub===key?'var(--c-neon)':'#111'}; color:${sub===key?'#000':'#888'}; border:1px solid #333; cursor:pointer; padding:5px; font-weight:bold;`;
-        p.innerHTML = `<div style="display:flex; gap:5px; margin-bottom:10px;"><button class="t-sub" data-key="personal" style="${btnStyle('personal')}">PERSONAL</button><button class="t-sub" data-key="war" style="${btnStyle('war')}">WAR</button><button class="t-sub" data-key="shared" style="${btnStyle('shared')}">SHARED</button></div><div id="target-list"></div>`;
+        const btnStyle = (key) => `flex:1; background:\( {sub===key?'var(--c-neon)':'#111'}; color: \){sub===key?'#000':'#888'}; border:1px solid #333; cursor:pointer; padding:5px; font-weight:bold;`;
+        p.innerHTML = `<div style="display:flex; gap:5px; margin-bottom:10px;"><button class="t-sub" data-key="personal" style="\( {btnStyle('personal')}">PERSONAL</button><button class="t-sub" data-key="war" style=" \){btnStyle('war')}">WAR</button><button class="t-sub" data-key="shared" style="${btnStyle('shared')}">SHARED</button></div><div id="target-list"></div>`;
         const list = this.store.targets[sub] || [];
         const container = p.querySelector("#target-list");
-        p.querySelectorAll(".t-sub").forEach(b => { b.addEventListener("click", () => { this.targetSubTab = b.dataset.key; this.renderTargets(); }); });
+        p.querySelectorAll(".t-sub").forEach(b => { 
+            b.addEventListener("click", () => { this.targetSubTab = b.dataset.key; this.renderTargets(); }); 
+        });
         if(!list.length) { container.innerHTML = `<div class="loader-text">NO TARGETS</div>`; return; }
-        const rows = list.map(t => `<tr><td>${this.renderOnlineDot(t.onlineState)}</td><td style="color:#fff">${this.sanitize(t.name)}</td><td>${t.level}</td><td>${this.renderStatusBadge(t.status)}</td><td style="text-align:right"><span class="act-btn act-att" data-id="${t.id}">⚔</span></td></tr>`).join("");
+        const rows = list.map(t => `<tr><td>\( {this.renderOnlineDot(t.onlineState)}</td><td style="color:#fff"> \){this.sanitize(t.name)}</td><td>\( {t.level}</td><td> \){this.renderStatusBadge(t.status)}</td><td style="text-align:right"><span class="act-btn act-att" data-id="${t.id}">Attack</span></td></tr>`).join("");
         container.innerHTML = `<table class="nexus-table"><thead><tr><th>●</th><th>NAME</th><th>LVL</th><th>STS</th><th>ACT</th></tr></thead><tbody>${rows}</tbody></table>`;
         this.attachActionListeners(container);
     }
@@ -352,42 +329,127 @@ class Major {
             if(this.activeTab === "faction" && d.factionMembers) this.renderFaction();
             if(this.activeTab === "enemy" && d.enemyFactionMembers) this.renderEnemies();
         });
-        this.general.signals.listen("GLOBAL_SITREP_READY", d => { if(d.heatmap) { this.store.heatmap = d.heatmap; if(this.activeTab === "overview") this.renderOverview(); } });
+        this.general.signals.listen("GLOBAL_SITREP_READY", d => { 
+            if(d.heatmap) { this.store.heatmap = d.heatmap; if(this.activeTab === "overview") this.renderOverview(); } 
+        });
         this.general.signals.listen("ASK_COLONEL_RESPONSE", d => {
             const win = this.shadow.querySelector("#col-msgs");
-            if(win && d.answer) { const div = document.createElement("div"); div.className = "msg msg-ai"; div.textContent = "[AI] " + d.answer; win.appendChild(div); win.scrollTop = win.scrollHeight; }
+            if(win && d.answer) { 
+                const div = document.createElement("div"); 
+                div.className = "msg msg-ai"; 
+                div.textContent = "[AI] " + d.answer; 
+                win.appendChild(div); 
+                win.scrollTop = win.scrollHeight; 
+            }
         });
     }
 
     sanitize(s) { const d=document.createElement('div'); d.textContent=String(s||""); return d.innerHTML; }
     renderStatusBadge(st) { const s = (st||"").toLowerCase(); if(s.includes("hosp")) return `<span class="badge badge-hos">HOSP</span>`; if(s.includes("jail")) return `<span class="badge badge-hos">JAIL</span>`; if(s.includes("travel")) return `<span class="badge badge-travel">FLY</span>`; return `<span class="badge badge-ok">OK</span>`; }
     renderOnlineDot(st) { return `<span style="color:${st==='online'?'#0f0':'#444'}; font-size:14px;">●</span>`; }
-    drawHeatmap(canvas, data) { const ctx = canvas.getContext("2d"); const w = canvas.width, h = canvas.height; ctx.clearRect(0,0,w,h); const bw = w / data.length; const max = Math.max(...data, 1); data.forEach((val, i) => { const hPct = val / max; ctx.fillStyle = `rgba(0, 243, 255, ${Math.max(0.1, hPct)})`; ctx.fillRect(i*bw, h-(h*hPct), bw, h*hPct); }); }
-    attachActionListeners(root) { root.querySelectorAll(".act-att").forEach(b => { b.addEventListener("click", () => window.location.href = `/loader.php?sid=attack&user2ID=${b.dataset.id}`); }); root.querySelectorAll(".act-spy").forEach(b => { b.addEventListener("click", () => this.general.signals.dispatch("REQUEST_PLAYER_SITREP", { id: b.dataset.id })); }); }
+    drawHeatmap(canvas, data) { 
+        const ctx = canvas.getContext("2d"); 
+        const w = canvas.width, h = canvas.height; 
+        ctx.clearRect(0,0,w,h); 
+        const bw = w / data.length; 
+        const max = Math.max(...data, 1); 
+        data.forEach((val, i) => { 
+            const hPct = val / max; 
+            ctx.fillStyle = `rgba(0, 243, 255, ${Math.max(0.1, hPct)})`; 
+            ctx.fillRect(i*bw, h-(h*hPct), bw, h*hPct); 
+        }); 
+    }
+    attachActionListeners(root) { 
+        root.querySelectorAll(".act-att").forEach(b => { 
+            b.addEventListener("click", () => window.location.href = `/loader.php?sid=attack&user2ID=${b.dataset.id}`); 
+        }); 
+        root.querySelectorAll(".act-spy").forEach(b => { 
+            b.addEventListener("click", () => this.general.signals.dispatch("REQUEST_PLAYER_SITREP", { id: b.dataset.id })); 
+        }); 
+    }
     toggleDrawer() { this.drawerOpen = !this.drawerOpen; this.updateDrawerSide(); }
-    updateDrawerSide() { const cls = this.drawerSide === "right" ? (this.drawerOpen ? "drawer-open-right" : "") + " right" : (this.drawerOpen ? "drawer-open-left" : ""); this.drawerEl.className = cls; }
+    updateDrawerSide() { 
+        const cls = this.drawerSide === "right" 
+            ? (this.drawerOpen ? "drawer-open-right" : "") + " right" 
+            : (this.drawerOpen ? "drawer-open-left" : ""); 
+        this.drawerEl.className = cls; 
+    }
     attachDragLogic() {
         const btn = this.buttonEl;
         const start = (e) => {
             if(e.type==='mousedown' && e.button!==0) return;
-            e.preventDefault(); this.dragging = true; this._isDragging = true;
+            e.preventDefault(); 
+            this.dragging = true; 
+            this._isDragging = true;
             const t = e.touches ? e.touches[0] : e;
-            const r = btn.getBoundingClientRect(); this.dragOffsetX = t.clientX - r.left; this.dragOffsetY = t.clientY - r.top;
-            const move = (ev) => { const p = ev.touches ? ev.touches[0] : ev; btn.style.left = (p.clientX - this.dragOffsetX)+"px"; btn.style.top = (p.clientY - this.dragOffsetY)+"px"; };
-            const stop = () => { this.dragging = false; setTimeout(() => this._isDragging = false, 100); window.removeEventListener("mousemove",move); window.removeEventListener("mouseup",stop); window.removeEventListener("touchmove",move); window.removeEventListener("touchend",stop); };
-            window.addEventListener("mousemove",move); window.addEventListener("mouseup",stop); window.addEventListener("touchmove",move,{passive:false}); window.addEventListener("touchend",stop);
+            const r = btn.getBoundingClientRect(); 
+            this.dragOffsetX = t.clientX - r.left; 
+            this.dragOffsetY = t.clientY - r.top;
+            const move = (ev) => { 
+                const p = ev.touches ? ev.touches[0] : ev; 
+                btn.style.left = (p.clientX - this.dragOffsetX)+"px"; 
+                btn.style.top = (p.clientY - this.dragOffsetY)+"px"; 
+            };
+            const stop = () => { 
+                this.dragging = false; 
+                setTimeout(() => this._isDragging = false, 100); 
+                window.removeEventListener("mousemove",move); 
+                window.removeEventListener("mouseup",stop); 
+                window.removeEventListener("touchmove",move); 
+                window.removeEventListener("touchend",stop); 
+            };
+            window.addEventListener("mousemove",move); 
+            window.addEventListener("mouseup",stop); 
+            window.addEventListener("touchmove",move,{passive:false}); 
+            window.addEventListener("touchend",stop);
         };
-        btn.addEventListener("mousedown",start); btn.addEventListener("touchstart",start,{passive:false});
+        btn.addEventListener("mousedown",start); 
+        btn.addEventListener("touchstart",start,{passive:false});
     }
-    attachButtonLogic() { this.buttonEl.addEventListener("click", () => { if(!this._isDragging) this.toggleDrawer(); }); }
-    attachResizeObserver() { window.addEventListener("resize", () => this.updateDrawerSide()); }
+    attachButtonLogic() { 
+        this.buttonEl.addEventListener("click", () => { if(!this._isDragging) this.toggleDrawer(); }); 
+    }
+    attachResizeObserver() { 
+        window.addEventListener("resize", () => this.updateDrawerSide()); 
+    }
 
     startInlineScanner() {
-        const scan = () => { document.querySelectorAll("a[href*='profiles.php?XID=']").forEach(a => { if(a.dataset.nexus) return; const id = a.href.match(/XID=(\d+)/)?.[1]; if(id) { a.dataset.nexus = "1"; const s = document.createElement("span"); s.innerHTML = `<span class="act-btn act-att" data-id="${id}" style="font-size:10px; margin-left:4px;">⚔</span>`; a.after(s); this.attachActionListeners(s); } }); };
-        this.mutationObserver = new MutationObserver(scan); this.mutationObserver.observe(document.body, {childList:true, subtree:true}); scan();
+        const scan = () => { 
+            document.querySelectorAll("a[href*='profiles.php?XID=']").forEach(a => { 
+                if(a.dataset.nexus) return; 
+                const id = a.href.match(/XID=(\d+)/)?.[1]; 
+                if(id) { 
+                    a.dataset.nexus = "1"; 
+                    const s = document.createElement("span"); 
+                    s.innerHTML = `<span class="act-btn act-att" data-id="${id}" style="font-size:10px; margin-left:4px;">Attack</span>`; 
+                    a.after(s); 
+                    this.attachActionListeners(s); 
+                } 
+            }); 
+        };
+        this.mutationObserver = new MutationObserver(scan); 
+        this.mutationObserver.observe(document.body, {childList:true, subtree:true}); 
+        scan();
     }
 }
 
-if (window.WAR_GENERAL) window.WAR_GENERAL.register("Major", Major);
+/* ============================================================
+   SAFE BOOTSTRAP — REGISTER INSTANCE
+   ============================================================ */
+function waitForGeneral(attempt = 0) {
+    if (window.WAR_GENERAL && typeof window.WAR_GENERAL.register === "function") {
+        console.log("%c[MAJOR] V8.0 CONNECTED.", "color: #00f3ff; background: #000; padding: 4px; font-weight:bold;");
+        window.WAR_GENERAL.register("Major", new Major());
+        return;
+    }
+
+    const delay = Math.min(1000, 100 * Math.pow(1.5, attempt));
+    if (attempt < 120) {
+        setTimeout(() => waitForGeneral(attempt + 1), delay);
+    } else {
+        console.error("[MAJOR] CONNECTION FAILED. WAR_GENERAL NOT FOUND.");
+    }
 }
+waitForGeneral();
+
 })();
