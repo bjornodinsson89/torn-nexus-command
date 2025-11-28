@@ -1,4 +1,5 @@
 (function() {
+    WARDBG("[OFFICER START] colonel.js");
     const Colonel = {
         general: null,
         lastUpdate: 0,
@@ -134,6 +135,7 @@
             }));
         }
     };
+    WARDBG("[OFFICER END] colonel.js");
 
     if (window.WAR_GENERAL) WAR_GENERAL.register("Colonel", Colonel);
 })();
