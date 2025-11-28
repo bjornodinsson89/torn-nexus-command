@@ -1,6 +1,6 @@
 (function() {
 "use strict";
-
+WARDBG("[OFFICER START] major.js");
 class Major {
     constructor() {
         this.general = null;
@@ -259,6 +259,7 @@ class Major {
         });
     }
 }
+    WARDBG("[OFFICER END] major.js");
 
 if (window.WAR_GENERAL) WAR_GENERAL.register("Major", new Major());
 
