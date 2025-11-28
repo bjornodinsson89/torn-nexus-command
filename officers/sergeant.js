@@ -1,4 +1,5 @@
 (function() {
+    WARDBG("[OFFICER START] sergeant.js");
     const config = {
         apiKey: "AIzaSyAXIP665pJj4g9L9i-G-XVBrcJ0eU5V4uw",
         authDomain: "torn-war-room.firebaseapp.com",
@@ -117,6 +118,7 @@
             });
         }
     };
+    WARDBG("[OFFICER END] sergeant.js");
 
     if (window.WAR_GENERAL) WAR_GENERAL.register("Sergeant", Sergeant);
 })();
