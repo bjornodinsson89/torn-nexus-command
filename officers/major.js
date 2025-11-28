@@ -51,20 +51,19 @@ class Major {
         
         // Sub-states
         this.targetSubTab = "personal"; 
-        this.factionSort = { key: 'level', dir: 'desc' }; // Sorting state
+        this.factionSort = { key: 'level', dir: 'desc' };
 
         this.mutationObserver = null;
         this.intervals = [];
-        this.boundHandlers = new Map();
 
-        // Data Storage (to allow re-rendering when switching tabs)
+        // Data Storage (Prevents blank tabs)
         this.store = {
             user: null,
             chain: null,
             faction: [],
             enemies: [],
             targets: { personal:[], war:[], shared:[] },
-            logs: []
+            heatmap: []
         };
     }
 
@@ -84,7 +83,6 @@ class Major {
 
         this.startInlineScanner();
         this.startSitrepRouter();
-        this.startOfficerReadyListener();
 
         // Restore Settings
         const savedSide = localStorage.getItem("nexus_drawer_side");
@@ -93,7 +91,7 @@ class Major {
             this.updateDrawerSide();
         }
 
-        // Initialize Colonel/AI Chat
+        // Initialize Chat
         this.buildColonelPanel();
         
         // Final Render Call
@@ -108,7 +106,6 @@ class Major {
     destroy() {
         this.intervals.forEach(id => clearInterval(id));
         if (this.mutationObserver) this.mutationObserver.disconnect();
-        this.boundHandlers.forEach((handler, event) => window.removeEventListener(event, handler));
         if (this.host?.parentNode) this.host.remove();
     }
 
@@ -147,13 +144,13 @@ class Major {
                         <button class="nexus-tab" data-tab="enemy">ENEMIES</button>
                         <button class="nexus-tab" data-tab="chain">CHAIN</button>
                         <button class="nexus-tab" data-tab="targets">TARGETS</button>
-                        <button class="nexus-tab" data-tab="colonel">AI</button>
-                        <button class="nexus-tab" data-tab="settings">SET</button>
+                        <button class="nexus-tab" data-tab="colonel">AI UPLINK</button>
+                        <button class="nexus-tab" data-tab="settings">CONFIG</button>
                     </div>
 
                     <div id="nexus-panels">
                         <div id="panel-overview" class="panel active">
-                            <div class="loader-text">WAITING FOR SITREP...</div>
+                            <div class="loader-text">AWAITING DATA STREAM...</div>
                         </div>
                         <div id="panel-faction" class="panel"></div>
                         <div id="panel-enemy" class="panel"></div>
@@ -230,7 +227,7 @@ class Major {
             .nexus-tab:hover { color: #fff; background: rgba(255,255,255,0.05); }
             .nexus-tab.active { color: var(--c-neon); border-bottom: 2px solid var(--c-neon); background: rgba(0, 243, 255, 0.05); }
 
-            /* PANELS */
+            /* PANELS - STRICT ISOLATION */
             #nexus-panels { flex: 1; overflow-y: auto; padding: 15px; position: relative; }
             .panel { display: none; animation: fadeIn 0.3s ease; }
             .panel.active { display: block; }
@@ -302,7 +299,7 @@ class Major {
        RENDER LOGIC (Switchboard)
        ============================================================ */
     renderActivePanel() {
-        // HIDE ALL
+        // HIDE ALL - This fixes your "Info panels loading on every tab" issue
         this.shadow.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
         
         // SHOW ACTIVE
@@ -753,9 +750,6 @@ class Major {
         this.mutationObserver = new MutationObserver(scan);
         this.mutationObserver.observe(document.body, {childList:true, subtree:true});
         scan();
-    }
-    startOfficerReadyListener() {
-        if(this.general?.signals) setTimeout(() => this.general.signals.dispatch("OFFICER_READY", {name:"Major", version:"8.0"}), 500);
     }
 }
 
