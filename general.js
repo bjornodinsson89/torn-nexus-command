@@ -4,6 +4,8 @@
 // @description  Torn War helper
 // @author       BjornOdinsson89
 // @match        https://www.torn.com/*
+// @match        https://www.torn.com/loader.php*
+// @match        https://www.torn.com/page.php*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -45,19 +47,26 @@
     }
 
     function loadPlugin(url) {
-        return new Promise((resolve, reject) => {
-            GM_xmlhttpRequest({
-                method: "GET",
-                url,
-                onload: r => {
-                    try { new Function(r.responseText)(); resolve(); }
-                    catch (e) { reject(e); }
-                },
-                onerror: reject
-            });
+    return new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+            method: "GET",
+            url,
+            onload: r => {
+                try {
+                    const s = document.createElement("script");
+                    s.textContent = r.responseText;
+                    document.documentElement.appendChild(s);
+                    s.remove();
+                    resolve();
+                } catch(e) {
+                    reject(e);
+                }
+            },
+            onerror: reject
         });
-    }
-
+    });
+}
+    
     window.WAR_GENERAL = {
         register(name, module) {
             _roster[name] = module;
