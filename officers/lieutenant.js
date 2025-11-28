@@ -1,100 +1,84 @@
-/***************************************************
- * WAR_LIEUTENANT v2.2 (Final Fixed)
- ***************************************************/
+// === WAR_LIEUTENANT vX — NEXUS EDITION ===
 
 (function() {
     const Lieutenant = {
         general: null,
-        intervals: [],
-        listeners: [],
-        memoryKey: "lieutenant_chain_memory_v22",
-        memory: { active: false, hits: 0, timeLeft: 0, lastUpdate: 0, paceHistory: [] },
-        failCount: 0,
-
-        init(General) {
-            this.cleanup();
-            this.general = General;
-            this.loadMemory();
-            this.registerListeners();
-            this.startPolling();
-            console.log("%c[Lieutenant v2.2] Recon Online", "color:#4cf");
+        interval: null,
+        memory: {
+            chainActive: false,
+            chainHits: 0,
+            chainTimeout: 0
         },
 
-        cleanup() {
-            this.intervals.forEach(id => clearInterval(id));
-            this.listeners.forEach(unsub => unsub?.());
-            this.intervals = [];
-            this.listeners = [];
+        init(G) {
+            this.general = G;
+            this.start();
         },
 
-        registerListeners() {
-            this.listeners.push(this.general.signals.listen("RAW_INTEL", intel => {
-                if (intel?._processed) return;
-                this.ingest(intel);
-            }));
-        },
-
-        startPolling() {
-            this.intervals.push(setInterval(() => {
+        start() {
+            this.interval = setInterval(() => {
                 if (!this.general.intel.hasCredentials()) return;
                 this.poll();
-            }, 1000));
+            }, 1000);
         },
 
         poll() {
-            const wait = this.pollRate();
+            const rate = this.getRate();
             if (!this._tick) this._tick = 0;
             this._tick++;
-            if (this._tick < wait) return;
+            if (this._tick < rate) return;
             this._tick = 0;
 
-            this.general.intel.request({
-                normalize: true,
-                selections: ["chain", "faction", "war", "profile"]
-            }).then(intel => {
-                intel._processed = true;
-                this.general.signals.dispatch("RAW_INTEL", intel);
-                this.failCount = 0;
-            }).catch(() => {
-                this.failCount++;
-                if (this.failCount > 3) setTimeout(() => this.failCount = 0, 60000);
-            });
+            this.general.intel.request("chain,faction,war,profile")
+                .then(d => {
+                    const intel = this.normalize(d);
+                    this.general.signals.dispatch("RAW_INTEL", intel);
+                });
         },
 
-        pollRate() {
-            if (this.memory.timeLeft < 50 && this.memory.active) return 1;
-            if (this.memory.active) return 3;
+        getRate() {
+            if (this.memory.chainActive && this.memory.chainTimeout < 50) return 1;
+            if (this.memory.chainActive) return 3;
             return 15;
         },
 
-        ingest(intel) {
-            if (!intel?.chain) return;
-            const c = intel.chain;
-            this.memory.active = c.current > 0;
-            this.memory.hits = c.current;
-            this.memory.timeLeft = c.timeout;
-            this.memory.lastUpdate = Date.now();
+        normalize(d) {
+            const chain = d.chain || {};
+            const faction = d.faction || {};
+            const profile = d.profile || {};
+            const war = d.war || {};
 
-            this.memory.paceHistory = this.memory.paceHistory || [];
-            this.memory.paceHistory.push({ time: Date.now(), hits: 1 });
-            const cutoff = Date.now() - 60000;
-            this.memory.paceHistory = this.memory.paceHistory.filter(p => p.time > cutoff);
-            if (this.memory.paceHistory.length > 100) this.memory.paceHistory.shift();
+            this.memory.chainActive = chain.current > 0;
+            this.memory.chainHits = chain.current || 0;
+            this.memory.chainTimeout = chain.timeout || 0;
 
-            this.saveMemory();
-        },
-
-        loadMemory() {
-            try {
-                const raw = localStorage.getItem(this.memoryKey);
-                if (raw) this.memory = JSON.parse(raw);
-            } catch {}
-        },
-
-        saveMemory() {
-            try {
-                localStorage.setItem(this.memoryKey, JSON.stringify(this.memory));
-            } catch {}
+            return {
+                user: {
+                    id: profile.player_id,
+                    name: profile.name,
+                    level: profile.level,
+                    hp: profile.life?.current,
+                    max_hp: profile.life?.maximum,
+                    status: profile.status?.state,
+                    last_action: profile.last_action?.relative
+                },
+                chain: {
+                    hits: chain.current || 0,
+                    timeLeft: chain.timeout || 0,
+                    log: chain.log || []
+                },
+                faction: {
+                    id: faction.faction_id,
+                    name: faction.name,
+                    members: faction.members || {}
+                },
+                war: {
+                    state: war.war?.status || "PEACE",
+                    faction: war.war?.faction || {},
+                    enemy: war.war?.enemy_faction || {},
+                    enemyMembers: war.war?.enemy_faction?.members || {}
+                }
+            };
         }
     };
 
