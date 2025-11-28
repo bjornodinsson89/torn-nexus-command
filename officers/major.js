@@ -1,5 +1,3 @@
-// === MAJOR v8.1 — NEXUS BLACK OPS (FIXED) ===
-
 (function() {
 "use strict";
 
@@ -8,15 +6,10 @@ class Major {
         this.general = null;
         this.host = null;
         this.shadow = null;
-        this.drawerEl = null;
         this.drawerOpen = false;
-        this.drawerSide = "left";
-        this.buttonEl = null;
-        this.dragOffX = 0;
-        this.dragOffY = 0;
-        this.dragging = false;
         this.activeTab = "overview";
         this.targetSubTab = "personal";
+
         this.store = {
             user: null,
             chain: null,
@@ -29,6 +22,7 @@ class Major {
 
     init(G) {
         this.general = G;
+        WARDBG("Major init()");
         this.createHost();
         this.renderBase();
         this.renderStyles();
@@ -49,21 +43,6 @@ class Major {
 
             this.renderPanel();
         });
-
-        this.general.signals.listen("MAJOR_SHARED_TARGETS", d => {
-            this.store.targets.shared = d.shared || [];
-            if (this.activeTab === "targets") this.renderTargets();
-        });
-
-        this.general.signals.listen("ASK_COLONEL_RESPONSE", d => {
-            const w = this.shadow.querySelector("#ai-log");
-            if (w && d.answer) {
-                const msg = document.createElement("div");
-                msg.className = "ai-msg";
-                msg.textContent = d.answer;
-                w.appendChild(msg);
-            }
-        });
     }
 
     createHost() {
@@ -71,9 +50,9 @@ class Major {
         this.host = document.createElement("div");
         this.host.id = "nexus-major-host";
         this.host.style.position = "fixed";
-        this.host.style.zIndex = "2147483647";
         this.host.style.top = "0";
         this.host.style.left = "0";
+        this.host.style.zIndex = "2147483647";
         this.shadow = this.host.attachShadow({ mode: "open" });
         document.body.appendChild(this.host);
     }
@@ -106,18 +85,18 @@ class Major {
         const s = document.createElement("style");
         s.textContent = `
             :host { all: initial; }
-            #btn { position: fixed; bottom:20px; left:20px; width:50px; height:50px; background:#000; border:2px solid #00f3ff; border-radius:50%; color:#00f3ff; display:flex; align-items:center; justify-content:center; cursor:pointer; z-index:9999; }
-            #drawer { position: fixed; top:0; left:0; width:380px; height:100vh; background:#050505; color:#00f3ff; transform: translateX(-100%); transition:0.3s; z-index:9998; overflow-y:auto; border-right:2px solid #00f3ff; }
-            #drawer.on { transform: translateX(0); }
+            #btn { position:fixed; bottom:20px; left:20px; width:50px; height:50px; background:#000; border:2px solid #00f3ff; border-radius:50%; color:#00f3ff; display:flex; align-items:center; justify-content:center; cursor:pointer; z-index:9999; }
+            #drawer { position:fixed; top:0; left:0; width:380px; height:100vh; background:#050505; color:#00f3ff; transform:translateX(-100%); transition:0.3s; overflow-y:auto; z-index:9998; border-right:2px solid #00f3ff; }
+            #drawer.on { transform:translateX(0); }
             #tabs { display:flex; border-bottom:1px solid #00f3ff; }
-            #tabs button { flex:1; background:#000; color:#00f3ff; padding:10px; border:none; cursor:pointer; }
+            #tabs button { flex:1; padding:10px; background:#000; color:#00f3ff; border:none; cursor:pointer; }
             #tabs button.on { background:#00f3ff; color:#000; }
             .panel { display:none; padding:10px; }
             .panel.on { display:block; }
-            table { width:100%; color:#fff; font-size:12px; border-collapse: collapse; }
-            td, th { padding:4px; border-bottom:1px solid #222; }
-            #ai-log { background:#111; color:#0ff; height:200px; overflow-y:auto; padding:10px; }
-            .ai-msg { margin-bottom:6px; }
+            table { width:100%; color:#fff; font-size:12px; border-collapse:collapse; }
+            td,th { padding:4px; border-bottom:1px solid #222; }
+            #ai-log { background:#111; height:200px; overflow-y:auto; padding:10px; }
+            .ai-msg { margin-bottom:6px; color:#0ff; }
         `;
         this.shadow.appendChild(s);
     }
@@ -127,9 +106,11 @@ class Major {
             b.addEventListener("click", () => {
                 this.shadow.querySelectorAll("#tabs button").forEach(x => x.classList.remove("on"));
                 this.shadow.querySelectorAll(".panel").forEach(x => x.classList.remove("on"));
+
                 b.classList.add("on");
                 this.activeTab = b.dataset.t;
                 this.shadow.querySelector(`#p-${this.activeTab}`).classList.add("on");
+
                 this.renderPanel();
             });
         });
@@ -174,35 +155,56 @@ class Major {
     renderFaction() {
         const p = this.shadow.querySelector("#p-faction");
         const list = this.store.faction;
-        if (!list.length) { p.textContent = "No faction data"; return; }
 
-        p.innerHTML = "<table>" + list.map(m => `
-            <tr>
-                <td>${m.name}</td>
-                <td>${m.level}</td>
-                <td>${m.status}</td>
-            </tr>
-        `).join("") + "</table>";
+        if (!list.length) {
+            p.textContent = "No faction data";
+            return;
+        }
+
+        p.innerHTML = `
+            <table>
+                ${list.map(m => `
+                    <tr>
+                        <td>${m.name}</td>
+                        <td>${m.level}</td>
+                        <td>${m.status}</td>
+                    </tr>
+                `).join("")}
+            </table>
+        `;
     }
 
     renderEnemies() {
         const p = this.shadow.querySelector("#p-enemy");
         const list = this.store.enemies;
-        if (!list.length) { p.textContent = "No hostiles"; return; }
 
-        p.innerHTML = "<table>" + list.map(m => `
-            <tr>
-                <td>${m.name}</td>
-                <td>${m.level}</td>
-                <td>${m.status}</td>
-            </tr>
-        `).join("") + "</table>";
+        if (!list.length) {
+            p.textContent = "No hostiles";
+            return;
+        }
+
+        p.innerHTML = `
+            <table>
+                ${list.map(m => `
+                    <tr>
+                        <td>${m.name}</td>
+                        <td>${m.level}</td>
+                        <td>${m.status}</td>
+                    </tr>
+                `).join("")}
+            </table>
+        `;
     }
 
     renderChain() {
         const p = this.shadow.querySelector("#p-chain");
         const c = this.store.chain;
-        if (!c) { p.textContent = "No chain data"; return; }
+
+        if (!c) {
+            p.textContent = "No chain information";
+            return;
+        }
+
         p.innerHTML = `
             <div>Hits: ${c.hits}</div>
             <div>Timeout: ${c.timeLeft}s</div>
@@ -212,47 +214,52 @@ class Major {
     renderTargets() {
         const p = this.shadow.querySelector("#p-targets");
         const list = this.store.targets[this.targetSubTab] || [];
-        if (!list.length) { p.textContent = "No targets"; return; }
 
-        p.innerHTML = "<table>" + list.map(t => `
-            <tr>
-                <td>${t.name}</td>
-                <td>${t.level}</td>
-                <td>${t.status}</td>
-            </tr>
-        `).join("") + "</table>";
+        if (!list.length) {
+            p.textContent = "No targets";
+            return;
+        }
+
+        p.innerHTML = `
+            <table>
+                ${list.map(t => `
+                    <tr>
+                        <td>${t.name}</td>
+                        <td>${t.level}</td>
+                        <td>${t.status}</td>
+                    </tr>
+                `).join("")}
+            </table>
+        `;
     }
 
     renderAI() {
         const p = this.shadow.querySelector("#p-ai");
+
         p.innerHTML = `
             <div id="ai-log"></div>
             <input id="ai-input" placeholder="Command..." style="width:100%; padding:5px; background:#111; color:#0ff; border:1px solid #00f3ff;">
         `;
+
         const input = p.querySelector("#ai-input");
         const log = p.querySelector("#ai-log");
 
         input.addEventListener("keydown", e => {
             if (e.key === "Enter" && input.value.trim()) {
-                const q = input.value.trim();
+                const txt = input.value.trim();
+
                 const msg = document.createElement("div");
                 msg.className = "ai-msg";
-                msg.textContent = "> " + q;
+                msg.textContent = "> " + txt;
                 log.appendChild(msg);
-                this.general.signals.dispatch("ASK_COLONEL", { question: q });
+
+                this.general.signals.dispatch("ASK_COLONEL", { question: txt });
                 input.value = "";
             }
         });
     }
 }
 
-function wait(at=0) {
-    if (window.WAR_GENERAL && typeof window.WAR_GENERAL.register === "function") {
-        window.WAR_GENERAL.register("Major", new Major());
-        return;
-    }
-    if (at < 40) setTimeout(() => wait(at+1), 200);
-}
+if (window.WAR_GENERAL) WAR_GENERAL.register("Major", new Major());
 
-wait();
 })();
