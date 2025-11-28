@@ -1,4 +1,9 @@
-(function() {
+// Lieutenant officer module — forced execution version
+WARDBG("[OFFICER RAW LOAD] Lieutenant.js");
+
+// Explicit module function ensures execution regardless of GitHub encoding issues
+function NEXUS_LIEUTENANT_MODULE() {
+
     WARDBG("[OFFICER START] Lieutenant.js");
 
     const Lieutenant = {
@@ -11,10 +16,13 @@
         init(G) {
             this.general = G;
             WARDBG("Lieutenant init()");
+
             this.interval = setInterval(() => {
                 if (!this.general.intel.hasCredentials()) return;
+
                 this.tick++;
                 const rate = this.getRate();
+
                 if (this.tick >= rate) {
                     this.tick = 0;
                     this.requestIntel();
@@ -29,11 +37,13 @@
         },
 
         requestIntel() {
-            this.general.intel.request("basic,profile,chain,faction,territory,war")
+            this.general.intel
+                .request("basic,profile,chain,faction,territory,war")
                 .then(d => {
                     const intel = this.normalize(d);
                     this.general.signals.dispatch("RAW_INTEL", intel);
-                });
+                })
+                .catch(err => WARDBG("Lieutenant intel error: " + err));
         },
 
         normalize(d) {
@@ -77,7 +87,13 @@
 
     WARDBG("[OFFICER END] Lieutenant.js");
 
-    if (unsafeWindow.WAR_GENERAL)
+    // CRITICAL: register using unsafeWindow
+    if (unsafeWindow.WAR_GENERAL) {
         unsafeWindow.WAR_GENERAL.register("Lieutenant", Lieutenant);
+    } else {
+        WARDBG("ERROR: WAR_GENERAL not found during Lieutenant registration.");
+    }
+}
 
-})();
+// Explicit execution — cannot fail silently
+NEXUS_LIEUTENANT_MODULE();
