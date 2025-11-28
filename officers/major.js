@@ -1,5 +1,6 @@
-(function() {
-"use strict";
+WARDBG("[OFFICER RAW LOAD] Major.js");
+
+function NEXUS_MAJOR_MODULE() {
 
 WARDBG("[OFFICER START] Major.js");
 
@@ -22,9 +23,6 @@ class Major {
         };
     }
 
-    /*********************************
-     * INIT
-     *********************************/
     init(G) {
         this.general = G;
         WARDBG("Major init()");
@@ -39,10 +37,8 @@ class Major {
         this.renderPanel();
     }
 
-    /*********************************
-     * SIGNALS
-     *********************************/
     bindSignals() {
+        // SITREP feed from the Colonel
         this.general.signals.listen("SITREP_UPDATE", d => {
             if (d.user) this.store.user = d.user;
             if (d.chain) this.store.chain = d.chain;
@@ -54,19 +50,18 @@ class Major {
             this.renderPanel();
         });
 
+        // Shared target updates from Sergeant
         this.general.signals.listen("SHARED_TARGETS_UPDATED", t => {
             this.store.targets.shared = t;
             if (this.activeTab === "targets") this.renderTargets();
         });
 
+        // AI query bridge to Colonel
         this.general.signals.listen("ASK_COLONEL", q => {
             this.answerAI(q.question);
         });
     }
 
-    /*********************************
-     * HOST + SHADOW DOM
-     *********************************/
     createHost() {
         if (document.getElementById("nexus-major-host")) return;
 
@@ -81,9 +76,6 @@ class Major {
         document.body.appendChild(this.host);
     }
 
-    /*********************************
-     * BASE UI LAYOUT
-     *********************************/
     renderBase() {
         this.shadow.innerHTML = `
             <div id="nexus-btn">N</div>
@@ -110,9 +102,6 @@ class Major {
         `;
     }
 
-    /*********************************
-     * CSS
-     *********************************/
     renderStyles() {
         const s = document.createElement("style");
         s.textContent = `
@@ -231,13 +220,9 @@ class Major {
                 color: #000;
             }
         `;
-
         this.shadow.appendChild(s);
     }
 
-    /*********************************
-     * TAB HANDLERS
-     *********************************/
     bindTabs() {
         this.shadow.querySelectorAll("#tabs button").forEach(b => {
             b.addEventListener("click", () => {
@@ -246,6 +231,7 @@ class Major {
 
                 b.classList.add("on");
                 this.activeTab = b.dataset.t;
+
                 this.shadow.querySelector(`#p-${this.activeTab}`).classList.add("on");
 
                 this.renderPanel();
@@ -253,9 +239,6 @@ class Major {
         });
     }
 
-    /*********************************
-     * DRAWER BUTTON
-     *********************************/
     bindDrawer() {
         const btn = this.shadow.querySelector("#nexus-btn");
         const dr = this.shadow.querySelector("#nexus-drawer");
@@ -265,9 +248,6 @@ class Major {
         });
     }
 
-    /*********************************
-     * PANEL ROUTER
-     *********************************/
     renderPanel() {
         if (this.activeTab === "overview") this.renderOverview();
         else if (this.activeTab === "faction") this.renderFaction();
@@ -277,9 +257,6 @@ class Major {
         else if (this.activeTab === "ai") this.renderAI();
     }
 
-    /*********************************
-     * OVERVIEW
-     *********************************/
     renderOverview() {
         const p = this.shadow.querySelector("#p-overview");
         const u = this.store.user;
@@ -301,14 +278,11 @@ class Major {
         `;
     }
 
-    /*********************************
-     * FACTION MEMBERS
-     *********************************/
     renderFaction() {
         const p = this.shadow.querySelector("#p-faction");
         const list = this.store.faction;
 
-        if (!list || !list.length) {
+        if (!list.length) {
             p.textContent = "No faction intel.";
             return;
         }
@@ -327,14 +301,11 @@ class Major {
         `;
     }
 
-    /*********************************
-     * ENEMY MEMBERS
-     *********************************/
     renderEnemies() {
         const p = this.shadow.querySelector("#p-enemy");
         const list = this.store.enemies;
 
-        if (!list || !list.length) {
+        if (!list.length) {
             p.textContent = "No enemy intel.";
             return;
         }
@@ -353,9 +324,6 @@ class Major {
         `;
     }
 
-    /*********************************
-     * CHAIN PANEL
-     *********************************/
     renderChain() {
         const p = this.shadow.querySelector("#p-chain");
         const c = this.store.chain;
@@ -371,12 +339,8 @@ class Major {
         `;
     }
 
-    /*********************************
-     * TARGETS PANEL
-     *********************************/
     renderTargets() {
         const p = this.shadow.querySelector("#p-targets");
-        const targets = this.store.targets;
 
         p.innerHTML = `
             <div class="target-tabs">
@@ -387,11 +351,9 @@ class Major {
             <div id="target-list"></div>
         `;
 
-        // bind sub-tabs
         this.shadow.querySelectorAll(".target-tabs button").forEach(b => {
             b.addEventListener("click", () => {
-                this.shadow.querySelectorAll(".target-tabs button")
-                    .forEach(x => x.classList.remove("on"));
+                this.shadow.querySelectorAll(".target-tabs button").forEach(x => x.classList.remove("on"));
 
                 b.classList.add("on");
                 this.targetSubTab = b.dataset.t;
@@ -400,7 +362,6 @@ class Major {
             });
         });
 
-        // default to personal
         this.shadow.querySelector(`.target-tabs button[data-t="${this.targetSubTab}"]`)
             ?.classList.add("on");
 
@@ -429,9 +390,6 @@ class Major {
         `;
     }
 
-    /*********************************
-     * AI PANEL
-     *********************************/
     renderAI() {
         const p = this.shadow.querySelector("#p-ai");
 
@@ -463,9 +421,6 @@ class Major {
         }
     }
 
-    /*********************************
-     * AI RESPONSE PROCESSOR
-     *********************************/
     answerAI(question) {
         const log = this.shadow.querySelector("#ai-log");
         if (!log) return;
@@ -476,14 +431,15 @@ class Major {
             return;
         }
 
-        // VERY SIMPLE AI RESPONSE MODEL
-        if (question.toLowerCase().includes("threat")) {
+        const q = question.toLowerCase();
+
+        if (q.includes("threat")) {
             log.innerHTML += `<div class="ai-msg">Threat level: ${Math.round(a.threat * 100)}%</div>`;
-        } else if (question.toLowerCase().includes("risk")) {
+        } else if (q.includes("risk")) {
             log.innerHTML += `<div class="ai-msg">Risk level: ${Math.round(a.risk * 100)}%</div>`;
-        } else if (question.toLowerCase().includes("next")) {
-            log.innerHTML += `<div class="ai-msg">Next hit predicted in: ${a.prediction.nextHit}s</div>`;
-        } else if (question.toLowerCase().includes("drop")) {
+        } else if (q.includes("next")) {
+            log.innerHTML += `<div class="ai-msg">Next hit predicted in ${a.prediction.nextHit}s</div>`;
+        } else if (q.includes("drop")) {
             log.innerHTML += `<div class="ai-msg">Chain drop forecast: ${a.prediction.drop}</div>`;
         } else {
             log.innerHTML += `<div class="ai-msg">Unrecognized query.</div>`;
@@ -495,8 +451,13 @@ class Major {
 
 WARDBG("[OFFICER END] Major.js");
 
-// ⭐ FIXED: use unsafeWindow for registration
-if (unsafeWindow.WAR_GENERAL)
-    unsafeWindow.WAR_GENERAL.register("Major", new Major());
+if (window.WAR_GENERAL) {
+    WARDBG("Major registering with WAR_GENERAL");
+    window.WAR_GENERAL.register("Major", new Major());
+} else {
+    WARDBG("ERROR: window.WAR_GENERAL missing during Major registration.");
+}
 
-})();
+}
+
+NEXUS_MAJOR_MODULE();
