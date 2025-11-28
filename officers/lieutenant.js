@@ -1,7 +1,5 @@
-// Lieutenant officer module — forced execution version
 WARDBG("[OFFICER RAW LOAD] Lieutenant.js");
 
-// Explicit module function ensures execution regardless of GitHub encoding issues
 function NEXUS_LIEUTENANT_MODULE() {
 
     WARDBG("[OFFICER START] Lieutenant.js");
@@ -87,13 +85,8 @@ function NEXUS_LIEUTENANT_MODULE() {
 
     WARDBG("[OFFICER END] Lieutenant.js");
 
-    // CRITICAL: register using unsafeWindow
-    if (unsafeWindow.WAR_GENERAL) {
+    if (unsafeWindow.WAR_GENERAL)
         unsafeWindow.WAR_GENERAL.register("Lieutenant", Lieutenant);
-    } else {
-        WARDBG("ERROR: WAR_GENERAL not found during Lieutenant registration.");
-    }
 }
 
-// Explicit execution — cannot fail silently
 NEXUS_LIEUTENANT_MODULE();
