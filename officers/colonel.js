@@ -21,6 +21,7 @@
 
         init(G) {
             this.general = G;
+            WARDBG("Colonel init()");
             this.general.signals.listen("RAW_INTEL", d => this.ingest(d));
         },
 
@@ -134,5 +135,5 @@
         }
     };
 
-    if (window.WAR_GENERAL) window.WAR_GENERAL.register("Colonel", Colonel);
+    if (window.WAR_GENERAL) WAR_GENERAL.register("Colonel", Colonel);
 })();
