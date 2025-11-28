@@ -1,236 +1,170 @@
 // ==UserScript==
-// @name         WAR_GENERAL v4.0 — FINAL FIXED & HARDENED
-// @namespace    WAR_ROOM
-// @version      4.0
-// @description  Nexus Core – Event Bus, Officer Loader, Credential Vault, Safe Fetch, Full Officer Comms
+// @name         WAR_GENERAL_NEXUS
+// @version      1.1
+// @description  Torn War helper
+// @author       BjornOdinsson89
 // @match        https://www.torn.com/*
-// @match        https://www2.torn.com/*
-// @connect      api.torn.com
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
-// @run-at       document-end
+// @grant        GM_addStyle
 // ==/UserScript==
 
-(function () {
-    "use strict";
+(function() {
+    'use strict';
 
-    /************************************************************
-     * EVENT BUS
-     ************************************************************/
-    const signals = {
-        _listeners: {},
-
-        listen(event, fn) {
-            if (!this._listeners[event]) this._listeners[event] = [];
-            this._listeners[event].push(fn);
-
-            return () => {
-                const arr = this._listeners[event];
-                if (!arr) return;
-                const idx = arr.indexOf(fn);
-                if (idx !== -1) arr.splice(idx, 1);
-                if (arr.length === 0) delete this._listeners[event];
-            };
-        },
-
-        dispatch(event, payload) {
-            const arr = this._listeners[event];
-            if (!arr) return;
-            // Copy array to prevent mutation during dispatch
-            arr.slice().forEach(fn => {
-                try { fn(payload); }
-                catch (err) { console.error(`[WAR_GENERAL] Listener error on "${event}":`, err); }
-            });
-        }
+    let _secureKey = null;
+    const _roster = {};
+    const _events = {};
+    const Crypto = {
+        lock: t => btoa(t.split('').reverse().join('')),
+        unlock: t => atob(t).split('').reverse().join('')
     };
 
-    /************************************************************
-     * OFFICER REGISTRY 
-     ************************************************************/
-    const officers = {};
-    const readyOfficers = new Set();
+    const stored = GM_getValue("WAR_API_KEY");
+    if (stored) _secureKey = Crypto.unlock(stored);
 
-    function register(name, officer) {
-        if (!name || typeof officer !== "object" || officer === null) {
-            console.error(`[WAR_GENERAL] Invalid officer registration: ${name}`);
-            return false;
-        }
-
-        officers[name] = officer;
-        console.log(`%c[WAR_GENERAL] Officer "${name}" registered.`, "color:#0f0");
-
-        // Auto-init if General is already online
-        if (window.WAR_GENERAL && officer.init) {
-            try {
-                officer.init(window.WAR_GENERAL);
-                readyOfficers.add(name);
-                signals.dispatch("OFFICER_READY", { name, officer });
-            } catch (err) {
-                console.error(`[WAR_GENERAL] Officer "${name}" failed to init:`, err);
-            }
-        }
-        return true;
-    }
-
-    /************************************************************
-     * CREDENTIAL VAULT 
-     ************************************************************/
-    function getCredentials() {
-        return GM_getValue("torn_api_key") ||
-               document.querySelector("input[name='api-key']")?.value ||
-               localStorage.getItem("torn_api_key") ||
-               "";
-    }
-
-    function hasCredentials() {
-        return !!getCredentials().trim();
-    }
-
-    /************************************************************
-     * SAFE FETCH LAYER 
-     ************************************************************/
-    async function safeFetch(url, opts = {}) {
+    function performSecureFetch(selection) {
         return new Promise((resolve, reject) => {
-            const key = opts.apiKey || getCredentials();
-            if (!key) return reject(new Error("No API key"));
-
+            if (!_secureKey) return reject("NO_KEY");
+            const url = `https://api.torn.com/user/?selections=${selection}&key=${_secureKey}`;
             GM_xmlhttpRequest({
                 method: "GET",
-                url: url.includes("?") ? `\( {url}&key= \){key}` : `\( {url}?key= \){key}`,
-                timeout: opts.timeout || 10000,
-                headers: { "Accept": "application/json" },
-                onload: res => {
-                    if (res.status !== 200) return reject(new Error(`HTTP ${res.status}`));
+                url,
+                onload: r => {
+                    if (r.status !== 200) return reject("HTTP");
                     try {
-                        const data = JSON.parse(res.responseText);
-                        if (data.error) reject(new Error(data.error.code + ": " + data.error.error));
-                        else resolve(data);
-                    } catch (e) { reject(e); }
+                        const d = JSON.parse(r.responseText);
+                        if (d.error) reject("API_ERR");
+                        else resolve(d);
+                    } catch(e) { reject("PARSE"); }
                 },
-                onerror: () => reject(new Error("Network error")),
-                ontimeout: () => reject(new Error("Request timeout"))
+                onerror: () => reject("NET")
             });
         });
     }
 
-    /************************************************************
-     * INTEL LAYER 
-     ************************************************************/
-    const intel = {
-        hasCredentials,
-        getCredentials,
-
-        async request({ selections = ["basic"], normalize = false, id } = {}) {
-            const sel = Array.isArray(selections) ? selections.join(",") : selections;
-            const base = id ? `user/${id}` : "user";
-            const url = `https://api.torn.com/\( {base}/?selections= \){sel}`;
-            const data = await safeFetch(url);
-
-            if (normalize) {
-                return this.normalize(data);
-            }
-            return data;
-        },
-
-        normalize(raw) {
-            if (!raw) return null;
-            return {
-                user: raw.player_id ? {
-                    id: raw.player_id,
-                    name: raw.name,
-                    level: raw.level,
-                    status: raw.status?.description || raw.status || "Unknown",
-                    hp: raw.status?.state === "Hospital" ? raw.status?.hospital_timestamp : raw.life?.current || 0,
-                    max_hp: raw.life?.maximum || 100,
-                    energy: raw.energy?.current || 0,
-                    nerve: raw.nerve?.current || 0
-                } : null,
-                chain: raw.chain ? {
-                    current: raw.chain.current || 0,
-                    timeout: raw.chain.timeout || 0
-                } : null,
-                faction: raw.faction ? {
-                    faction_id: raw.faction.faction_id,
-                    name: raw.faction.faction_name,
-                    members: raw.faction.members || {}
-                } : null,
-                war: raw.war ? {
-                    state: raw.war.state || "PEACE",
-                    enemyMembers: Object.values(raw.war.enemies || {}),
-                    targets: raw.war.targets || []
-                } : null
-            };
-        }
-    };
-
-    /************************************************************
-     * PLUGIN LOADER 
-     ************************************************************/
     function loadPlugin(url) {
         return new Promise((resolve, reject) => {
-            const script = document.createElement("script");
-            script.src = url;
-            script.onload = () => resolve();
-            script.onerror = () => reject(new Error(`Failed to load plugin: ${url}`));
-            document.head.appendChild(script);
+            GM_xmlhttpRequest({
+                method: "GET",
+                url,
+                onload: r => {
+                    try { new Function(r.responseText)(); resolve(); }
+                    catch (e) { reject(e); }
+                },
+                onerror: reject
+            });
         });
     }
 
-    /************************************************************
-     * WAR_GENERAL
-     ************************************************************/
-    const WAR_GENERAL = {
-        version: "4.0",
-        signals,
-        officers,
-        register,
-        intel,
+    window.WAR_GENERAL = {
+        register(name, module) {
+            _roster[name] = module;
+            if (module.init) module.init(this);
+        },
         loadPlugin,
-
-        // Legacy compatibility
-        getOfficer(name) { return officers[name] || null; },
-
-        // Init all registered officers when General comes online
-        _initOfficers() {
-            Object.entries(officers).forEach(([name, officer]) => {
-                if (!readyOfficers.has(name) && officer.init) {
-                    try {
-                        officer.init(this);
-                        readyOfficers.add(name);
-                        signals.dispatch("OFFICER_READY", { name, officer });
-                    } catch (err) {
-                        console.error(`[WAR_GENERAL] Failed to init officer "${name}":`, err);
-                    }
-                }
-            });
+        signals: {
+            listen(ev, fn) {
+                if (!_events[ev]) _events[ev] = [];
+                _events[ev].push(fn);
+                return () => _events[ev] = _events[ev].filter(f => f !== fn);
+            },
+            dispatch(ev, data) {
+                if (_events[ev]) _events[ev].forEach(f => f(data));
+            }
+        },
+        intel: {
+            request(selectionString) {
+                return performSecureFetch(selectionString);
+            },
+            setCredentials(rawKey) {
+                _secureKey = rawKey;
+                GM_setValue("WAR_API_KEY", Crypto.lock(rawKey));
+            },
+            hasCredentials() {
+                return !!_secureKey;
+            }
         }
     };
 
-    /************************************************************
-     * BOOT SEQUENCE 
-     ************************************************************/
-    function boot() {
-        if (window.WAR_GENERAL) {
-            console.warn("[WAR_GENERAL] Already loaded!");
-            return;
-        }
-
-        window.WAR_GENERAL = WAR_GENERAL;
-
-        console.log("%c[WAR_GENERAL v4.0] COMMAND ONLINE — OFFICERS, REPORT IN!", "color:#0f0; font-weight:bold; font-size:14px;");
-
-        // Expose for debugging
-        window.WG = WAR_GENERAL;
-
-        // Initialize all officers that registered early
-        WAR_GENERAL._initOfficers();
-
-        // Final readiness broadcast
-        signals.dispatch("GENERAL_READY", WAR_GENERAL);
+    function deployPlugins() {
+        const PLUGIN_URLS = [
+            "https://raw.githubusercontent.com/Bjornodinsson89/torn-nexus-command/main/officers/lieutenant.js",
+            "https://raw.githubusercontent.com/Bjornodinsson89/torn-nexus-command/main/officers/colonel.js",
+            "https://raw.githubusercontent.com/Bjornodinsson89/torn-nexus-command/main/officers/sergeant.js",
+            "https://raw.githubusercontent.com/Bjornodinsson89/torn-nexus-command/main/officers/major.js"
+        ];
+        PLUGIN_URLS.forEach(u => WAR_GENERAL.loadPlugin(u));
     }
 
-    // Run immediately
-    boot();
+    const popupHtml = `
+        <div id="nexus-api-overlay"></div>
+        <div id="nexus-api-modal">
+            <div id="nexus-api-title">WAR ROOM // AUTHORIZATION</div>
+            <div id="nexus-scrollbox">
+                <div id="nexus-scrolltext">
+                    <b>OPERATOR:</b><br>
+                    You stand before the encrypted gate of the WAR ROOM — a classified command center operating beyond Torn’s standard battlefield interfaces.<br><br>
+                    <b>THE TORN API:</b><br>
+                    By entering your Torn API key, you authorize the General to retrieve tactical intelligence directly from HQ. This key grants <u>read-only</u> access to your status, faction data, chain metrics, and war conditions.<br><br>
+                    <b>FIREBASE DATABASE:</b><br>
+                    The Sergeant communicates with Firebase for faction coordination. Your API key is never sent to Firebase.<br><br>
+                    Proceed and unlock the War Room.
+                </div>
+            </div>
+            <input id="nexus-api-input" placeholder="Enter Torn API Key">
+            <button id="nexus-api-save">Authorize</button>
+        </div>
+    `;
+
+    const popupStyle = `
+        #nexus-api-overlay {
+            position: fixed; top:0; left:0; width:100%; height:100%;
+            background: rgba(0,0,0,0.75); backdrop-filter:blur(4px);
+            z-index: 99999997; display:none;
+        }
+        #nexus-api-modal {
+            position: fixed; top:50%; left:50%; transform:translate(-50%, -50%);
+            width: 315px; padding:18px; background:#050505;
+            border:2px solid #00f3ff; border-right: 2px solid #00f3ff;
+            box-shadow:0 0 25px rgba(0,243,255,0.4);
+            z-index:99999998; display:none; color:#00f3ff;
+            font-family: 'Courier New', monospace;
+        }
+        #nexus-scrollbox {
+            width:100%; height:160px; overflow-y:auto; padding:8px;
+            background:#000; border:1px solid #00f3ff; margin-bottom:12px;
+        }
+        #nexus-api-input {
+            width:100%; padding:7px; background:#000;
+            border:1px solid #00f3ff; color:#00f3ff; margin-bottom:10px;
+        }
+        #nexus-api-save {
+            width:100%; padding:9px; background:#00f3ff; color:#000;
+            font-weight:bold; cursor:pointer; border:none;
+        }
+`;
+    GM_addStyle(popupStyle);
+
+    function openPopup() {
+        const wrap = document.createElement("div");
+        wrap.innerHTML = popupHtml;
+        document.body.appendChild(wrap);
+        document.getElementById("nexus-api-overlay").style.display = "block";
+        document.getElementById("nexus-api-modal").style.display = "block";
+        document.getElementById("nexus-api-save").onclick = () => {
+            const val = document.getElementById("nexus-api-input").value.trim();
+            if (val) {
+                WAR_GENERAL.intel.setCredentials(val);
+                document.getElementById("nexus-api-overlay").remove();
+                document.getElementById("nexus-api-modal").remove();
+                deployPlugins();
+            }
+        };
+    }
+
+    if (!_secureKey) openPopup();
+    else deployPlugins();
 
 })();
