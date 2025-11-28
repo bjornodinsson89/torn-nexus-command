@@ -1,5 +1,5 @@
 /********************************************************************
- * MAJOR v7.3 DELUXE 
+ * MAJOR v8.0 "BLACK OPS" EDITION
  ********************************************************************/
 
 (function() {
@@ -10,16 +10,16 @@
    ============================================================ */
 function waitForGeneral(attempt = 0) {
     if (window.WAR_GENERAL && typeof window.WAR_GENERAL.register === "function") {
-        console.log("[MAJOR] WAR_GENERAL detected. Initializing.");
+        console.log("%c[MAJOR] CONNECTION ESTABLISHED.", "color: #00f3ff; background: #000; padding: 4px;");
         startMajor();
         return;
     }
 
-    const delay = Math.min(1000, 100 * Math.pow(1.5, attempt)); // exponential backoff
-    if (attempt < 120) { // ~60 seconds max
+    const delay = Math.min(1000, 100 * Math.pow(1.5, attempt));
+    if (attempt < 120) {
         setTimeout(() => waitForGeneral(attempt + 1), delay);
     } else {
-        console.error("[MAJOR] WAR_GENERAL not found after ~60 seconds. Aborting.");
+        console.error("[MAJOR] CONNECTION FAILED. WAR_GENERAL NOT FOUND.");
     }
 }
 waitForGeneral();
@@ -41,25 +41,23 @@ class Major {
         this.drawerSide = "left";
 
         this.buttonEl = null;
-        this.buttonPosition = { bottom: 20, left: 20 };
-
         this.dragging = false;
         this._isDragging = false;
         this.dragOffsetX = 0;
         this.dragOffsetY = 0;
 
         this.activeTab = "main";
-        this.targetSubTab = "personal";
+        this.targetSubTab = "personal"; // personal | war | shared
         this.tabsContainer = null;
         this.panelsContainer = null;
 
         this.mutationObserver = null;
 
+        // Officer Connection Tracking
         this.officerStatus = {
-            general: "ONLINE", // Implicit
+            general: "ONLINE",
             lieutenant: "OFFLINE",
             sergeant: "OFFLINE",
-            major: "ONLINE",
             colonel: "OFFLINE"
         };
 
@@ -68,102 +66,72 @@ class Major {
     }
 
     /* ============================================================
-       UI FINALIZATION
-       ============================================================ */
-    finalizeUI() {
-        if (typeof this.applyExtendedStyles === "function") this.applyExtendedStyles();
-        if (typeof this.buildColonelPanel === "function") this.buildColonelPanel();
-        if (typeof this.buildSettingsPanel === "function") this.buildSettingsPanel();
-        if (typeof this.attachSettingsLogic === "function") this.attachSettingsLogic();
-        
-        // Render initial active panel
-        this.renderActivePanel();
-    }
-
-    /* ============================================================
-       SANITIZATION HELPER (XSS DEFENSE)
-       ============================================================ */
-    sanitize(value) {
-        if (value === null || value === undefined) return "";
-        const s = String(value);
-        const div = document.createElement("div");
-        div.textContent = s;
-        return div.innerHTML;
-    }
-
-    /* ============================================================
-       INIT
+       CORE INITIALIZATION
        ============================================================ */
     init(General) {
         this.general = General;
 
         this.createHost();
         this.renderBaseHTML();
-        this.applyBaseStyles();
+        this.applyBaseStyles();      // Layout & Structure
+        this.applyExtendedStyles();  // The "Badass" Visuals
 
         this.attachButtonLogic();
         this.attachDragLogic();
         this.attachResizeObserver();
 
-        this.updateDrawerSide();
-        this.applyAnimationPreferences();
-
         this.startInlineScanner();
-       
         this.startSitrepRouter();
+        this.startOfficerReadyListener();
 
-        if (typeof this.startOfficerReadyListener === "function") {
-            this.startOfficerReadyListener();
+        // Restore Settings if available
+        const savedSide = localStorage.getItem("nexus_drawer_side");
+        if(savedSide) {
+            this.drawerSide = savedSide;
+            this.updateDrawerSide();
         }
 
         this.finalizeUI();
 
         if (this.general?.signals) {
             this.general.signals.dispatch("UI_READY", {});
-            this.general.signals.dispatch("MAJOR_READY", {});
-            console.log("[MAJOR] System Online.");
+            this.general.signals.dispatch("MAJOR_READY", { version: "8.0" });
         }
     }
 
+    finalizeUI() {
+        this.buildColonelPanel();
+        this.buildSettingsPanel();
+        this.attachSettingsLogic();
+        this.renderActivePanel();
+    }
+
     /* ============================================================
-       DESTROY 
+       CLEANUP
        ============================================================ */
     destroy() {
-        console.log("[MAJOR] Destroy — cleaning up.");
-        
         this.intervals.forEach(id => clearInterval(id));
-        this.intervals = [];
-
-        if (this.mutationObserver) {
-            this.mutationObserver.disconnect();
-            this.mutationObserver = null;
-        }
-
+        if (this.mutationObserver) this.mutationObserver.disconnect();
+        
         this.boundHandlers.forEach((handler, event) => {
             window.removeEventListener(event, handler);
         });
-        this.boundHandlers.clear();
-
-        if (this.host?.parentNode) {
-            this.host.remove();
-        }
-
-        this.host = this.shadow = this.drawerEl = this.buttonEl = null;
+        
+        if (this.host?.parentNode) this.host.remove();
+        this.host = null;
     }
 
     /* ============================================================
-       HOST + SHADOW DOM
+       HTML STRUCTURE
        ============================================================ */
     createHost() {
         if (this.host) return;
-
         this.host = document.createElement("div");
         this.host.id = "nexus-major-host";
         this.host.style.position = "fixed";
         this.host.style.zIndex = "999999";
-        this.host.style.top = "0";
+        this.host.style.top = "0"; 
         this.host.style.left = "0";
-
         this.shadow = this.host.attachShadow({ mode: "open" });
         document.body.appendChild(this.host);
     }
@@ -171,11 +139,20 @@ class Major {
     renderBaseHTML() {
         this.shadow.innerHTML = `
             <div id="nexus-container">
-                <button id="nexus-toggle" class="nexus-btn">N</button>
+                <button id="nexus-toggle" class="nexus-btn">
+                    <div class="scanner-line"></div>
+                    <span class="btn-icon">N</span>
+                </button>
                 <div id="nexus-drawer">
                     <div class="drawer-header">
-                        <span class="drawer-title">WAR NEXUS // v7.3</span>
-                        <span id="close-drawer" style="cursor:pointer; float:right;">&times;</span>
+                        <div class="header-glitch">WAR NEXUS // SYS.V8</div>
+                        <div class="header-controls">
+                            <span id="close-drawer" class="control-btn">×</span>
+                        </div>
+                    </div>
+                    <div class="drawer-subheader">
+                        <span id="conn-status" class="status-online">CONNECTED</span>
+                        <span id="clock-display">00:00:00</span>
                     </div>
                     <div id="nexus-tabs"></div>
                     <div id="nexus-panels"></div>
@@ -187,252 +164,192 @@ class Major {
         this.buttonEl = this.shadow.querySelector("#nexus-toggle");
         this.tabsContainer = this.shadow.querySelector("#nexus-tabs");
         this.panelsContainer = this.shadow.querySelector("#nexus-panels");
-        
-        // Quick close listener
-        const closeBtn = this.shadow.querySelector("#close-drawer");
-        if(closeBtn) closeBtn.addEventListener("click", () => this.toggleDrawer());
+
+        // Clock
+        setInterval(() => {
+            const el = this.shadow.querySelector("#clock-display");
+            if(el) el.textContent = new Date().toLocaleTimeString('en-US', {hour12:false});
+        }, 1000);
+
+        this.shadow.querySelector("#close-drawer").addEventListener("click", () => this.toggleDrawer());
 
         this.buildTabs();
         this.buildPanels();
     }
-    
+
+    /* ============================================================
+       STYLING (THE "BADASS" PART)
+       ============================================================ */
     applyBaseStyles() {
         const style = document.createElement("style");
         style.textContent = `
-            :host { all: initial; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+            :host { all: initial; font-family: 'Segoe UI', Roboto, sans-serif; --c-neon: #00f3ff; --c-alert: #ff003c; --c-warn: #ffcc00; --c-bg: #0a0b10; --c-panel: rgba(16, 20, 25, 0.9); }
             * { box-sizing: border-box; }
-            #nexus-container {
-                position: fixed;
-                bottom: 0; left: 0;
-                pointer-events: none;
-                --drawer-transition: 0.32s;
-                --button-transition: 0.15s;
-                --c-primary: #00c8ff;
-                --c-bg: rgba(10, 14, 18, 0.95);
-                --c-panel: rgba(255,255,255,0.03);
-            }
-            .nexus-btn {
-                pointer-events: auto;
-                position: fixed;
-                width: 50px; height: 50px;
-                border-radius: 50%;
-                font-size: 20px;
-                border: 2px solid var(--c-primary);
-                background: #000;
-                color: var(--c-primary);
-                box-shadow: 0 0 8px var(--c-primary);
-                cursor: pointer;
-                transition: transform var(--button-transition), box-shadow var(--button-transition);
-                user-select: none;
-                bottom: 20px; left: 20px;
-                z-index: 1000000;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                font-weight: bold;
-            }
-            .nexus-btn:hover {
-                transform: scale(1.1);
-                box-shadow: 0 0 12px #00e1ff;
-            }
-            #nexus-drawer {
-                position: fixed;
-                top: 0;
-                width: 380px;
-                height: 100vh;
-                background: var(--c-bg);
-                backdrop-filter: blur(8px);
-                border-right: 2px solid var(--c-primary);
-                transform: translateX(-100%);
-                transition: transform var(--drawer-transition);
-                pointer-events: auto;
-                display: flex;
-                flex-direction: column;
-                color: #eee;
-            }
-            #nexus-drawer.right {
-                border-right: none;
-                border-left: 2px solid var(--c-primary);
-                transform: translateX(100%);
-            }
-            .drawer-open-left { transform: translateX(0) !important; }
-            .drawer-closed-left { transform: translateX(-100%) !important; }
-            .drawer-open-right { transform: translateX(0) !important; }
-            .drawer-closed-right { transform: translateX(100%) !important; }
             
+            /* DRAWER */
+            #nexus-drawer {
+                position: fixed; top: 0; width: 400px; height: 100vh;
+                background: var(--c-bg);
+                border-right: 2px solid var(--c-neon);
+                transform: translateX(-100%);
+                transition: transform 0.3s cubic-bezier(0.4, 0.0, 0.2, 1);
+                display: flex; flex-direction: column;
+                box-shadow: 0 0 30px rgba(0, 243, 255, 0.15);
+                backdrop-filter: blur(10px);
+                z-index: 10000;
+            }
+            #nexus-drawer.right { border-right: none; border-left: 2px solid var(--c-neon); transform: translateX(100%); }
+            .drawer-open-left { transform: translateX(0) !important; }
+            .drawer-open-right { transform: translateX(0) !important; }
+
+            /* HEADER */
             .drawer-header {
-                padding: 15px;
-                border-bottom: 1px solid #333;
-                font-size: 16px;
-                font-weight: bold;
-                letter-spacing: 1px;
-                color: var(--c-primary);
-                background: rgba(0,0,0,0.5);
+                padding: 15px; background: linear-gradient(90deg, rgba(0,243,255,0.1), transparent);
+                border-bottom: 1px solid var(--c-neon);
+                display: flex; justify-content: space-between; align-items: center;
             }
-            #nexus-tabs {
-                display: flex;
-                flex-wrap: wrap;
-                background: rgba(0,0,0,0.3);
-                border-bottom: 1px solid #333;
+            .header-glitch { 
+                font-family: 'Courier New', monospace; font-weight: 900; font-size: 18px; 
+                letter-spacing: 2px; color: var(--c-neon); text-shadow: 0 0 5px var(--c-neon);
             }
-            #nexus-panels {
-                flex: 1;
-                overflow-y: auto;
-                padding: 10px;
+            .control-btn { color: #fff; font-size: 24px; cursor: pointer; transition: 0.2s; }
+            .control-btn:hover { color: var(--c-alert); text-shadow: 0 0 8px var(--c-alert); }
+
+            .drawer-subheader {
+                padding: 4px 15px; background: #000; display: flex; justify-content: space-between;
+                font-size: 10px; font-family: monospace; color: #555; border-bottom: 1px solid #333;
             }
-            /* Scrollbar */
-            #nexus-panels::-webkit-scrollbar { width: 6px; }
-            #nexus-panels::-webkit-scrollbar-track { background: #000; }
-            #nexus-panels::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+            .status-online { color: #0f0; }
+
+            /* TABS */
+            #nexus-tabs { display: flex; flex-wrap: wrap; background: #050505; }
+            .nexus-tab {
+                flex: 1; background: transparent; border: none; color: #666; padding: 12px 5px;
+                cursor: pointer; font-size: 11px; text-transform: uppercase; font-weight: bold;
+                border-bottom: 2px solid transparent; transition: 0.2s;
+            }
+            .nexus-tab:hover { color: #fff; background: rgba(255,255,255,0.05); }
+            .nexus-tab.active { color: var(--c-neon); border-bottom: 2px solid var(--c-neon); background: rgba(0, 243, 255, 0.1); }
+
+            /* PANELS */
+            #nexus-panels { flex: 1; overflow-y: auto; padding: 15px; }
+            #nexus-panels::-webkit-scrollbar { width: 4px; }
+            #nexus-panels::-webkit-scrollbar-thumb { background: var(--c-neon); }
+
+            /* TOGGLE BUTTON */
+            .nexus-btn {
+                position: fixed; bottom: 20px; left: 20px; width: 56px; height: 56px;
+                background: #000; border: 2px solid var(--c-neon); border-radius: 50%;
+                color: var(--c-neon); font-weight: bold; cursor: pointer; z-index: 10000;
+                box-shadow: 0 0 15px rgba(0,243,255,0.4); overflow: hidden;
+                display: flex; justify-content: center; align-items: center; font-size: 20px;
+                transition: transform 0.1s;
+            }
+            .nexus-btn:active { transform: scale(0.95); }
+            .nexus-btn:hover { box-shadow: 0 0 25px var(--c-neon); }
+            .scanner-line {
+                position: absolute; width: 100%; height: 2px; background: rgba(0,243,255,0.8);
+                top: 0; animation: scan 2s linear infinite; opacity: 0.5;
+            }
+            @keyframes scan { 0% { top: 0; } 100% { top: 100%; } }
         `;
         this.shadow.appendChild(style);
     }
-    
-    /* ============================================================
-       EXTENDED STYLES (POLISH)
-       ============================================================ */
+
     applyExtendedStyles() {
         const style = document.createElement("style");
         style.textContent = `
-            /* Tabs */
-            .nexus-tab {
-                flex: 1 1 auto;
-                background: transparent;
-                border: none;
-                border-bottom: 2px solid transparent;
-                color: #888;
-                padding: 10px 5px;
-                cursor: pointer;
-                font-size: 12px;
-                transition: 0.2s;
-            }
-            .nexus-tab:hover { color: #fff; }
-            .nexus-tab.active {
-                color: var(--c-primary);
-                border-bottom: 2px solid var(--c-primary);
-            }
-
-            /* Panels & Tiles */
+            /* TILES */
             .tile {
-                background: var(--c-panel);
-                border: 1px solid #333;
-                border-radius: 4px;
-                padding: 10px;
-                margin-bottom: 10px;
+                background: linear-gradient(135deg, rgba(20,20,20,0.9) 0%, rgba(10,10,10,0.95) 100%);
+                border: 1px solid #333; border-left: 3px solid #333;
+                margin-bottom: 12px; padding: 12px; position: relative;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.5);
             }
+            .tile:hover { border-left-color: var(--c-neon); }
             .tile h3 {
-                margin: 0 0 8px 0;
-                font-size: 12px;
-                text-transform: uppercase;
-                color: #aaa;
-                border-bottom: 1px solid #222;
-                padding-bottom: 4px;
+                margin: 0 0 10px 0; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+                color: #888; border-bottom: 1px solid #222; padding-bottom: 4px; display: flex; justify-content: space-between;
             }
-            .tile p { margin: 4px 0; font-size: 13px; }
-            .tile-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
-            /* Tables */
-            .nexus-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-            .nexus-table th { text-align: left; color: #888; border-bottom: 1px solid #444; padding: 4px; }
-            .nexus-table td { padding: 4px; border-bottom: 1px solid #222; vertical-align: middle; }
-            .nexus-table tr:last-child td { border-bottom: none; }
+            /* GRIDS */
+            .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+            .stat-box { text-align: center; background: rgba(0,0,0,0.3); padding: 8px; border: 1px solid #222; }
+            .stat-val { font-size: 16px; color: #fff; font-weight: bold; }
+            .stat-lbl { font-size: 10px; color: #666; text-transform: uppercase; }
+
+            /* TABLES */
+            .nexus-table { width: 100%; border-collapse: collapse; font-size: 12px; color: #ccc; }
+            .nexus-table th { text-align: left; color: var(--c-neon); border-bottom: 1px solid #444; padding: 6px; font-size: 10px; text-transform: uppercase; }
+            .nexus-table td { padding: 6px; border-bottom: 1px solid #222; }
+            .nexus-table tr:hover td { background: rgba(255,255,255,0.05); color: #fff; }
+
+            /* BADGES & DOTS */
+            .badge { padding: 2px 6px; border-radius: 2px; font-size: 9px; font-weight: bold; border: 1px solid transparent; }
+            .badge-hos { background: rgba(100,0,0,0.3); border-color: #f00; color: #f55; }
+            .badge-ok  { background: rgba(0,50,0,0.3); border-color: #0f0; color: #5f5; }
+            .badge-travel { color: #aaa; border: 1px solid #444; }
             
-            /* Badges & Dots */
-            .badge { padding: 2px 4px; border-radius: 3px; font-size: 10px; font-weight: bold; }
-            .badge-hos { background: #820000; color: #fff; }
-            .badge-jail { background: #c55; color: #fff; }
-            .badge-travel { background: #555; color: #fff; }
-            .badge-ok { background: #004400; color: #cfc; }
-            .badge-off { background: #222; color: #777; }
+            .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 5px; box-shadow: 0 0 4px currentColor; }
+            .dot-on { background: #0f0; color: #0f0; }
+            .dot-off { background: #555; color: #555; box-shadow: none; }
             
-            .badge-xtr { background: #f00; color: #fff; animation: pulse 1s infinite; }
-            .badge-hi { background: #d60; color: #fff; }
-            .badge-med { background: #aa0; color: #000; }
-            .badge-lo { background: #262; color: #ada; }
+            /* ACTION BUTTONS */
+            .act-btn { cursor: pointer; color: #888; transition: 0.2s; margin: 0 3px; font-size: 14px; }
+            .act-btn:hover { color: #fff; transform: scale(1.2); display: inline-block; text-shadow: 0 0 5px #fff; }
+            .act-att:hover { color: var(--c-alert); text-shadow: 0 0 5px var(--c-alert); }
             
-            .badge-lv { border: 1px solid #444; color: #aaa; }
-            .badge-rank { color: var(--c-primary); }
+            /* PROGRESS BARS */
+            .prog-track { width: 100%; height: 4px; background: #222; margin-top: 5px; position: relative; overflow: hidden; }
+            .prog-fill { height: 100%; background: var(--c-neon); width: 0%; box-shadow: 0 0 8px var(--c-neon); transition: width 0.5s linear; }
+            .prog-fill.danger { background: var(--c-alert); box-shadow: 0 0 8px var(--c-alert); }
 
-            .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
-            .dot-on { background: #0f0; box-shadow: 0 0 5px #0f0; }
-            .dot-recent { background: #fa0; }
-            .dot-danger { background: #f00; }
-            .dot-off { background: #444; }
-
-            /* Buttons within Tables */
-            .nib-att, .nib-ana, .nib-add { cursor: pointer; opacity: 0.7; transition: 0.2s; font-size: 14px; margin: 0 2px; }
-            .nib-att:hover { opacity: 1; color: #f55; transform: scale(1.2); }
-            .nib-ana:hover { opacity: 1; color: #5af; transform: scale(1.2); }
-            .nib-add:hover { opacity: 1; color: #5f5; transform: scale(1.2); }
-
-            /* Target Subtabs */
-            .target-subtabs { display: flex; gap: 4px; margin-bottom: 8px; }
-            .target-tab {
-                background: #222; border: 1px solid #444; color: #888;
-                padding: 4px 8px; cursor: pointer; flex: 1; font-size: 11px;
+            /* CHAT (COLONEL) */
+            .chat-window {
+                height: 350px; overflow-y: auto; background: #000; border: 1px solid #333;
+                padding: 10px; font-family: 'Courier New', monospace; font-size: 12px;
+                display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px;
             }
-            .target-tab:hover { background: #333; }
-
-            /* Inline Buttons on Page */
-            .nexus-inline-buttons {
-                display: inline-flex; gap: 4px; margin-left: 8px; vertical-align: middle;
-            }
-            .nexus-inline-buttons .nib {
-                font-size: 0; width: 16px; height: 16px; border-radius: 50%;
-                cursor: pointer; border: 1px solid #555; display: inline-block;
-                position: relative;
-            }
-            .nib-attack { background: #500; } 
-            .nib-analyze { background: #005; }
-            .nib-add { background: #050; }
-            .nib::after { font-size: 10px; color: #fff; position: absolute; top: 0; left: 4px; content: ''; }
+            .msg { padding: 8px; border-radius: 2px; max-width: 85%; line-height: 1.4; position: relative; }
+            .msg::before { content: ''; position: absolute; width: 0; height: 0; border-style: solid; }
             
-            /* Colonel Chat */
-            .col-user { 
-                align-self: flex-end; text-align: right; 
-                background: rgba(0, 200, 255, 0.1); 
-                padding: 6px; border-radius: 4px; 
-                border-left: 2px solid var(--c-primary);
-                font-size: 13px; color: #def;
-            }
-            .col-reply { 
-                align-self: flex-start; text-align: left; 
-                background: rgba(255, 160, 0, 0.1); 
-                padding: 6px; border-radius: 4px; 
-                border-right: 2px solid #f90;
-                font-size: 13px; color: #fdba;
-            }
-            #col-send, #col-input {
-                background: #111; border: 1px solid #333; color: #eee; padding: 6px;
-            }
-            #col-send { cursor: pointer; margin-top: 4px; width: 100%; }
-            #col-send:hover { background: #222; }
+            .msg-user { align-self: flex-end; background: rgba(0, 243, 255, 0.1); border: 1px solid rgba(0, 243, 255, 0.3); color: #def; }
+            .msg-ai   { align-self: flex-start; background: rgba(255, 100, 0, 0.1); border: 1px solid rgba(255, 100, 0, 0.3); color: #fbda; }
+            
+            .chat-input-area { display: flex; gap: 5px; }
+            .chat-input { flex: 1; background: #111; border: 1px solid #333; color: var(--c-neon); padding: 8px; font-family: monospace; outline: none; }
+            .chat-input:focus { border-color: var(--c-neon); }
+            .chat-send { background: #222; border: 1px solid #333; color: var(--c-neon); cursor: pointer; padding: 0 15px; font-weight: bold; transition: 0.2s; }
+            .chat-send:hover { background: var(--c-neon); color: #000; }
 
-            @keyframes pulse { 0% { opacity:1; } 50% { opacity:0.6; } 100% { opacity:1; } }
+            /* INLINE ICONS */
+            .nexus-inline-wrap { margin-left: 8px; display: inline-flex; gap: 2px; vertical-align: middle; }
+            .inline-btn { 
+                width: 18px; height: 18px; border-radius: 50%; font-size: 10px; 
+                display: flex; align-items: center; justify-content: center; 
+                cursor: pointer; border: 1px solid #555; color: #aaa; background: #000;
+            }
+            .inline-btn:hover { border-color: var(--c-neon); color: var(--c-neon); }
         `;
         this.shadow.appendChild(style);
     }
 
     /* ============================================================
-       TABS & PANELS 
+       TABS SETUP
        ============================================================ */
     buildTabs() {
         this.tabsContainer.innerHTML = `
-            <button class="nexus-tab active" data-tab="main">Main</button>
+            <button class="nexus-tab active" data-tab="main">Status</button>
             <button class="nexus-tab" data-tab="chain">Chain</button>
-            <button class="nexus-tab" data-tab="faction">Faction</button>
-            <button class="nexus-tab" data-tab="enemy">Enemies</button>
             <button class="nexus-tab" data-tab="targets">Targets</button>
-            <button class="nexus-tab" data-tab="colonel">Colonel</button>
-            <button class="nexus-tab" data-tab="settings">Settings</button>
+            <button class="nexus-tab" data-tab="colonel">AI Uplink</button>
+            <button class="nexus-tab" data-tab="settings">Config</button>
         `;
 
         this.tabsContainer.querySelectorAll(".nexus-tab").forEach(btn => {
             btn.addEventListener("click", () => {
-                // Update active state
-                this.tabsContainer.querySelectorAll(".nexus-tab").forEach(b => b.classList.remove("active"));
+                this.shadow.querySelectorAll(".nexus-tab").forEach(b => b.classList.remove("active"));
                 btn.classList.add("active");
-                
                 this.activeTab = btn.dataset.tab;
                 this.renderActivePanel();
             });
@@ -441,700 +358,455 @@ class Major {
 
     buildPanels() {
         this.panelsContainer.innerHTML = `
-            <div id="panel-main">Loading Nexus Main...</div>
-            <div id="panel-chain">Chain Inactive</div>
-            <div id="panel-faction">Loading Faction...</div>
-            <div id="panel-enemy">Loading Enemies...</div>
-            <div id="panel-targets">Loading Targets...</div>
-            <div id="panel-colonel">Connecting to Colonel...</div>
-            <div id="panel-settings">Settings</div>
+            <div id="panel-main"></div>
+            <div id="panel-chain"></div>
+            <div id="panel-targets"></div>
+            <div id="panel-colonel"></div>
+            <div id="panel-settings"></div>
         `;
-        this.renderActivePanel();
     }
 
     renderActivePanel() {
-        if (!this.panelsContainer) return;
-        this.panelsContainer.querySelectorAll("div[id^='panel-']").forEach(panel => {
-            panel.style.display = (panel.id === `panel-${this.activeTab}`) ? "block" : "none";
-        });
+        this.shadow.querySelectorAll("[id^='panel-']").forEach(p => p.style.display = "none");
+        const p = this.shadow.querySelector(`#panel-${this.activeTab}`);
+        if(p) p.style.display = "block";
     }
 
     /* ============================================================
-       OFFICER LISTENER
-       ============================================================ */
-    startOfficerReadyListener() {
-        if (!this.general?.signals) return;
-
-        this.general.signals.listen("OFFICER_READY", (data) => {
-            if (data && data.name) {
-                const name = data.name.toLowerCase();
-                if (this.officerStatus.hasOwnProperty(name)) {
-                    this.officerStatus[name] = "ONLINE";
-                    // If we have a status UI component, update it here
-                    console.log(`[MAJOR] Officer connected: ${data.name}`);
-                }
-            }
-        });
-        
-        // Announce myself again just in case late listeners join
-        setTimeout(() => {
-            this.general.signals.dispatch("OFFICER_READY", { name: "Major", version: "7.3" });
-        }, 1000);
-    }
-
-    /* ============================================================
-       BUTTON & DRAWER LOGIC
-       ============================================================ */
-    attachButtonLogic() {
-        this.buttonEl.addEventListener("click", (e) => {
-            if (this._isDragging || this.dragging) return;
-            e.preventDefault();
-            this.toggleDrawer();
-        });
-    }
-
-    toggleDrawer() {
-        this.drawerOpen = !this.drawerOpen;
-        this.applyDrawerClasses();
-    }
-
-    applyDrawerClasses() {
-        const side = this.drawerSide === "right" ? "right" : "left";
-
-        if (side === "right") {
-            this.drawerEl.className = this.drawerOpen ? "drawer-open-right" : "drawer-closed-right";
-            this.drawerEl.classList.add("right");
-        } else {
-            this.drawerEl.className = this.drawerOpen ? "drawer-open-left" : "drawer-closed-left";
-            this.drawerEl.classList.remove("right");
-        }
-    }
-
-    updateDrawerSide() {
-        this.applyDrawerClasses();
-    }
-
-    /* ============================================================
-       DRAG LOGIC 
-       ============================================================ */
-    attachDragLogic() {
-        const startDrag = (e) => {
-            if (e.button !== 0 && e.type !== 'touchstart') return; 
-            if(e.cancelable) e.preventDefault();
-
-            this.dragging = true;
-            this._isDragging = true;
-
-            const pt = (e.touches && e.touches.length) ? e.touches[0] : e;
-            const rect = this.buttonEl.getBoundingClientRect();
-            this.dragOffsetX = pt.clientX - rect.left;
-            this.dragOffsetY = pt.clientY - rect.top;
-
-            const moveHandler = (e) => {
-                const pt = (e.touches && e.touches.length) ? e.touches[0] : e;
-                let x = pt.clientX - this.dragOffsetX;
-                let y = pt.clientY - this.dragOffsetY;
-
-                const clamped = this.clampButtonPosition(x, y);
-                this.buttonEl.style.left = clamped.x + "px";
-                this.buttonEl.style.top = clamped.y + "px";
-                this.buttonEl.style.bottom = "auto";
-                this.buttonEl.style.right = "auto";
-            };
-
-            const endDrag = () => {
-                this.dragging = false;
-                setTimeout(() => this._isDragging = false, 120);
-
-                window.removeEventListener("mousemove", moveHandler);
-                window.removeEventListener("mouseup", endDrag);
-                window.removeEventListener("touchmove", moveHandler);
-                window.removeEventListener("touchend", endDrag);
-                window.removeEventListener("touchcancel", endDrag);
-
-                this.boundHandlers.delete("mousemove");
-                this.boundHandlers.delete("mouseup");
-                this.boundHandlers.delete("touchmove");
-                this.boundHandlers.delete("touchend");
-                this.boundHandlers.delete("touchcancel");
-            };
-
-            // Attach only now
-            window.addEventListener("mousemove", moveHandler);
-            window.addEventListener("mouseup", endDrag);
-            window.addEventListener("touchmove", moveHandler, { passive: false });
-            window.addEventListener("touchend", endDrag);
-            window.addEventListener("touchcancel", endDrag);
-
-            // Store for destroy()
-            this.boundHandlers.set("mousemove", moveHandler);
-            this.boundHandlers.set("mouseup", endDrag);
-            this.boundHandlers.set("touchmove", moveHandler);
-            this.boundHandlers.set("touchend", endDrag);
-            this.boundHandlers.set("touchcancel", endDrag);
-        };
-
-        this.buttonEl.addEventListener("mousedown", startDrag);
-        this.buttonEl.addEventListener("touchstart", startDrag, { passive: false });
-    }
-
-    clampButtonPosition(x, y) {
-        const w = window.innerWidth;
-        const h = window.innerHeight;
-        const rect = this.buttonEl.getBoundingClientRect();
-        const size = 50 + 16; // 50px button + 16px buffer
-
-        return {
-            x: Math.max(8, Math.min(w - size, x)),
-            y: Math.max(8, Math.min(h - size, y))
-        };
-    }
-
-    attachResizeObserver() {
-        window.addEventListener("resize", () => this.updateDrawerSide());
-    }
-
-    applyAnimationPreferences() { 
-        // Simple preference check
-        const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
-        if (mediaQuery.matches) {
-            this.host.style.setProperty("--drawer-transition", "0s");
-            this.host.style.setProperty("--button-transition", "0s");
-        }
-    }
-
-    /* ============================================================
-       MUTATIONOBSERVER
-       ============================================================ */
-    startInlineScanner() {
-        if (this.mutationObserver) return;
-
-        const processNode = (node) => {
-            if (!(node instanceof HTMLAnchorElement)) return;
-            if (!node.href.includes("profiles.php") || !node.href.includes("XID=")) return;
-            if (node.dataset.nexusEnhanced) return;
-
-            const id = this.extractInlineId(node.href);
-            if (!id) return;
-
-            const box = document.createElement("span");
-            box.className = "nexus-inline-buttons";
-            // Icons provided as empty spans with colors in CSS
-            box.innerHTML = `
-                <span class="nib nib-attack" title="Attack" data-id="${id}"></span>
-                <span class="nib nib-analyze" title="Analyze" data-id="${id}"></span>
-                <span class="nib nib-add" title="Add Target" data-id="${id}"></span>
-            `;
-
-            node.insertAdjacentElement("afterend", box);
-            node.dataset.nexusEnhanced = "1";
-            this.attachInlineEvents(box);
-        };
-
-        const observer = new MutationObserver((mutations) => {
-            for (const mut of mutations) {
-                for (const node of mut.addedNodes) {
-                    if (node.nodeType === Node.ELEMENT_NODE) {
-                        if (node.matches("a[href*='profiles.php?XID=']")) {
-                            processNode(node);
-                        }
-                        // Also check children
-                        node.querySelectorAll?.("a[href*='profiles.php?XID=']").forEach(processNode);
-                    }
-                }
-            }
-        });
-
-        observer.observe(document.body, {
-            childList: true,
-            subtree: true
-        });
-
-        this.mutationObserver = observer;
-
-        // Initial scan
-        document.querySelectorAll("a[href*='profiles.php?XID=']").forEach(processNode);
-    }
-
-    extractInlineId(url) {
-        const m = url.match(/XID=(\d+)/);
-        return m ? m[1] : null;
-    }
-
-    attachInlineEvents(node) {
-        if (!node) return;
-
-        const attack = node.querySelector(".nib-attack");
-        const analyze = node.querySelector(".nib-analyze");
-        const add = node.querySelector(".nib-add");
-
-        attack?.addEventListener("click", e => {
-            e.stopPropagation();
-            const id = e.currentTarget.dataset.id;
-            if (!id) return;
-            window.location.href = `/loader.php?sid=attack&user2ID=${id}`;
-        });
-
-        analyze?.addEventListener("click", e => {
-            e.stopPropagation();
-            const id = e.currentTarget.dataset.id;
-            if (!id || !this.general?.signals) return;
-            this.general.signals.dispatch("REQUEST_PLAYER_SITREP", { id });
-        });
-
-        add?.addEventListener("click", e => {
-            e.stopPropagation();
-            const id = e.currentTarget.dataset.id;
-            if (!id || !this.general?.signals) return;
-            this.general.signals.dispatch("ADD_TARGET", { id });
-        });
-    }
-
-    /* ============================================================
-       HEATMAP
-       ============================================================ */
-    drawHeatmap(canvas, arr) {
-        if (!canvas || !Array.isArray(arr) || arr.length === 0) return;
-
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-
-        const w = canvas.width;
-        const h = canvas.height;
-        const bw = w / arr.length;
-
-        ctx.clearRect(0, 0, w, h);
-
-        const valid = arr.filter(n => typeof n === "number" && !isNaN(n));
-        const max = valid.length > 0 ? Math.max(...valid) : 1;
-
-        arr.forEach((v, i) => {
-            const val = typeof v === "number" ? v : 0;
-            const pct = max > 0 ? val / max : 0;
-            const alpha = Math.min(Math.max(pct, 0.05), 1);
-            ctx.fillStyle = `rgba(0, 200, 255, ${alpha})`;
-            ctx.fillRect(i * bw, 0, bw - 1, h);
-        });
-    }
-
-    /* ============================================================
-       SITREP ROUTING
-       ============================================================ */
-    startSitrepRouter() {
-        if (!this.general?.signals) return;
-
-        this.general.signals.listen("SITREP_UPDATE", d => this.routeSitrep(d));
-        this.general.signals.listen("TARGETS_SCORED", d => this.updateTargetScores(d));
-        this.general.signals.listen("PLAYER_SITREP_READY", d => this.updateAnalyzeResult(d));
-        this.general.signals.listen("GLOBAL_SITREP_READY", d => this.routeGlobalSitrep(d));
-        this.general.signals.listen("FACTION_SITREP_READY", d => this.routeFactionSitrep(d));
-        this.general.signals.listen("ASK_COLONEL_RESPONSE", d => this.updateColonelAnswer(d));
-    }
-
-    routeSitrep(s) {
-        if (!s) return;
-
-        if (s.user) this.updateUserUI(s.user);
-        if (s.factionMembers) this.renderFactionTable(s.factionMembers);
-        if (s.enemyFactionMembers) this.renderEnemyTable(s.enemyFactionMembers);
-        if (s.targets) this.renderTargetTables(s.targets);
-        if (s.chain) this.updateChainUI(s.chain);
-        if (s.chainLog) this.renderChainLog(s.chainLog);
-    }
-
-    /* ============================================================
-       BADGES
-       ============================================================ */
-    renderStatusBadge(st) {
-        const s = (st || "").toLowerCase();
-        if (s.includes("hospital")) return `<span class="badge badge-hos">HOSP</span>`;
-        if (s.includes("jail")) return `<span class="badge badge-jail">JAIL</span>`;
-        if (s.includes("travel")) return `<span class="badge badge-travel">TRAVEL</span>`;
-        if (s.includes("online") || s.includes("okay")) return `<span class="badge badge-ok">OK</span>`;
-        return `<span class="badge badge-off">OFF</span>`;
-    }
-
-    renderThreatBadge(level) {
-        if (level >= 80) return `<span class="badge badge-xtr">EXTREME</span>`;
-        if (level >= 50) return `<span class="badge badge-hi">HIGH</span>`;
-        if (level >= 25) return `<span class="badge badge-med">MED</span>`;
-        return `<span class="badge badge-lo">LOW</span>`;
-    }
-
-    renderLevelBadge(lv) {
-        return `<span class="badge badge-lv">Lv ${this.sanitize(lv)}</span>`;
-    }
-
-    renderFactionRankChip(rank) {
-        return `<span class="badge badge-rank">${this.sanitize(rank || "--")}</span>`;
-    }
-
-    renderOnlineIndicator(type) {
-        if (type === "online") return `<span class="dot dot-on"></span>`;
-        if (type === "recent") return `<span class="dot dot-recent"></span>`;
-        if (type === "danger") return `<span class="dot dot-danger"></span>`;
-        return `<span class="dot dot-off"></span>`;
-    }
-
-    /* ============================================================
-       DASHBOARD
+       FEATURE: MAIN STATUS DASHBOARD
        ============================================================ */
     updateUserUI(user) {
         const p = this.shadow.querySelector("#panel-main");
         if (!p) return;
 
         p.innerHTML = `
-            <div class="tile-grid">
-                <div class="tile">
-                    <h3>Your Status</h3>
-                    <p><b>Name:</b> ${this.sanitize(user.name)}</p>
-                    <p><b>Level:</b> ${this.renderLevelBadge(user.level)}</p>
-                    <p><b>Status:</b> ${this.renderStatusBadge(user.status)}</p>
+            <div class="tile">
+                <h3>OPERATOR STATUS <span style="color:var(--c-neon)">${this.sanitize(user.name)}</span></h3>
+                <div class="grid-2">
+                    <div class="stat-box">
+                        <div class="stat-val">${this.sanitize(user.level)}</div>
+                        <div class="stat-lbl">Level</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-val" style="color:${user.hp < user.max_hp ? '#f55':'#0f0'}">${user.hp} / ${user.max_hp}</div>
+                        <div class="stat-lbl">Health</div>
+                    </div>
                 </div>
-                <div class="tile">
-                    <h3>Threat</h3>
-                    <p>${this.renderThreatBadge(user.threat)}</p>
+                <div style="margin-top:10px; font-size:12px; color:#aaa;">
+                    Status: ${this.renderStatusBadge(user.status)} <br>
+                    Energy: ${user.energy} / ${user.max_energy} <br>
+                    Nerve: ${user.nerve} / ${user.max_nerve}
                 </div>
-                <div class="tile" style="grid-column: span 2;">
-                    <h3>Activity Heatmap</h3>
-                    <canvas id="heatmap-main" width="340" height="60" style="width:100%;height:60px;"></canvas>
+            </div>
+
+            <div class="tile">
+                <h3>THREAT ASSESSMENT</h3>
+                <div style="text-align:center; padding:10px;">
+                    <span style="font-size:24px; font-weight:900; color:${user.threat > 50 ? '#f00' : '#fa0'}">
+                        ${this.sanitize(user.threat)}%
+                    </span>
+                    <div class="prog-track">
+                        <div class="prog-fill ${user.threat > 70 ? 'danger':''}" style="width:${user.threat}%"></div>
+                    </div>
                 </div>
+            </div>
+
+            <div class="tile">
+                <h3>GLOBAL HEATMAP</h3>
+                <canvas id="heatmap-main" width="350" height="60" style="width:100%; height:60px; image-rendering: pixelated;"></canvas>
             </div>
         `;
     }
 
     /* ============================================================
-       FACTION TABLE
+       FEATURE: CHAIN COMMAND (ALERTS & INFO)
        ============================================================ */
-    renderFactionTable(list = []) {
-        const p = this.shadow.querySelector("#panel-faction");
+    updateChainUI(chain = {}) {
+        const p = this.shadow.querySelector("#panel-chain");
         if (!p) return;
 
-        const rows = list.map(m => `
-            <tr>
-                <td>${this.renderOnlineIndicator(m.onlineState)}</td>
-                <td>${this.sanitize(m.name)}</td>
-                <td>${this.renderLevelBadge(m.level)}</td>
-                <td>${this.renderStatusBadge(m.status)}</td>
-                <td>${this.renderFactionRankChip(m.rank)}</td>
-            </tr>
-        `).join("");
+        const timeLeft = chain.timeLeft || 0; // seconds
+        const maxTime = 300; // standard 5 min chain
+        const pct = Math.min(100, Math.max(0, (timeLeft / maxTime) * 100));
+        const color = timeLeft < 60 ? 'var(--c-alert)' : 'var(--c-neon)';
+        
+        let alertBox = "";
+        if (timeLeft > 0 && timeLeft < 90) {
+            alertBox = `<div style="background:rgba(255,0,0,0.2); border:1px solid #f00; color:#f55; padding:10px; text-align:center; font-weight:bold; animation:pulse 1s infinite;">
+                ⚠ CRITICAL TIMEOUT WARNING ⚠
+            </div>`;
+        }
 
         p.innerHTML = `
+            ${alertBox}
             <div class="tile">
-                <h3>Faction Members</h3>
-                <table class="nexus-table">
-                    <thead>
-                        <tr><th>On</th><th>Name</th><th>Lv</th><th>Status</th><th>Rank</th></tr>
-                    </thead>
-                    <tbody>${rows}</tbody>
-                </table>
+                <h3>CHAIN METRICS</h3>
+                <div class="grid-2">
+                    <div class="stat-box">
+                        <div class="stat-val" style="color:var(--c-neon); font-size:24px;">${chain.hits || 0}</div>
+                        <div class="stat-lbl">CURRENT HITS</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-val" style="color:${color}">${this.formatTime(timeLeft)}</div>
+                        <div class="stat-lbl">TIMEOUT</div>
+                    </div>
+                </div>
+                <div class="prog-track" style="margin-top:10px;">
+                    <div class="prog-fill" style="width:${pct}%; background:${color}; box-shadow:0 0 10px ${color};"></div>
+                </div>
             </div>
-        `;
-    }
-
-    /* ============================================================
-       ENEMY TABLE
-       ============================================================ */
-    renderEnemyTable(list = []) {
-        const p = this.shadow.querySelector("#panel-enemy");
-        if (!p) return;
-
-        const rows = list.map(m => `
-            <tr>
-                <td>${this.renderOnlineIndicator(m.onlineState)}</td>
-                <td>${this.sanitize(m.name)}</td>
-                <td>${this.renderLevelBadge(m.level)}</td>
-                <td>${this.renderStatusBadge(m.status)}</td>
-                <td><span class="nib-att" data-id="${m.id}" title="Attack">⚔</span></td>
-            </tr>
-        `).join("");
-
-        p.innerHTML = `
+            
             <div class="tile">
-                <h3>Enemy Faction Members</h3>
-                <table class="nexus-table">
-                    <thead>
-                        <tr><th>On</th><th>Name</th><th>Lv</th><th>Status</th><th>A</th></tr>
-                    </thead>
-                    <tbody>${rows}</tbody>
-                </table>
+                <h3>TACTICAL LOG</h3>
+                <div id="chain-log-container" style="max-height:200px; overflow-y:auto; font-size:11px; font-family:monospace;"></div>
             </div>
         `;
 
-        this.attachAttackButtons(p);
+        if(chain.log) this.renderChainLog(chain.log);
+    }
+
+    renderChainLog(log) {
+        const container = this.shadow.querySelector("#chain-log-container");
+        if(!container || !log) return;
+        
+        container.innerHTML = log.map(entry => `
+            <div style="border-bottom:1px solid #222; padding:3px 0; color:#888;">
+                <span style="color:#fff;">${this.sanitize(entry.player)}</span> 
+                <span style="color:var(--c-neon)">+${entry.respect}</span>
+                <span style="float:right">${new Date(entry.time).toLocaleTimeString()}</span>
+            </div>
+        `).join("");
     }
 
     /* ============================================================
-       TARGETS TABLE
+       FEATURE: ADVANCED TARGETING SYSTEM
        ============================================================ */
     renderTargetTables(targets = { personal:[], war:[], shared:[] }) {
         const p = this.shadow.querySelector("#panel-targets");
         if (!p) return;
 
+        // Sub-tabs for targets
+        const current = this.targetSubTab;
+        const btnStyle = (key) => `flex:1; background:${current===key?'var(--c-neon)':'#111'}; color:${current===key?'#000':'#888'}; border:1px solid #333; cursor:pointer; padding:6px; font-weight:bold;`;
+
         p.innerHTML = `
-            <div class="target-subtabs">
-                <button class="target-tab" data-sub="personal">Personal</button>
-                <button class="target-tab" data-sub="war">War</button>
-                <button class="target-tab" data-sub="shared">Shared</button>
+            <div style="display:flex; gap:5px; margin-bottom:10px;">
+                <button class="t-sub" data-key="personal" style="${btnStyle('personal')}">PERSONAL</button>
+                <button class="t-sub" data-key="war" style="${btnStyle('war')}">WAR</button>
+                <button class="t-sub" data-key="shared" style="${btnStyle('shared')}">SHARED</button>
             </div>
-            <div id="target-content"></div>
+            <div id="target-list-container"></div>
         `;
 
-        p.querySelectorAll(".target-tab").forEach(btn => {
-            btn.addEventListener("click", () => {
-                this.targetSubTab = btn.dataset.sub;
-                this.renderTargetSubpanel(targets);
+        // Attach listeners
+        p.querySelectorAll(".t-sub").forEach(b => {
+            b.addEventListener("click", () => {
+                this.targetSubTab = b.dataset.key;
+                this.renderTargetTables(targets); // re-render
             });
         });
 
-        this.renderTargetSubpanel(targets);
+        this.renderTargetList(targets[this.targetSubTab] || []);
     }
 
-    renderTargetSubpanel(targets) {
-        const dest = this.shadow.querySelector("#target-content");
-        if (!dest) return;
+    renderTargetList(list) {
+        const container = this.shadow.querySelector("#target-list-container");
+        if(!container) return;
 
-        const list =
-            this.targetSubTab === "personal" ? targets.personal :
-            this.targetSubTab === "war"      ? targets.war :
-                                               targets.shared;
-
-        if (!list || list.length === 0) {
-            dest.innerHTML = `<div style="padding:10px;text-align:center;color:#666;">No targets in this category.</div>`;
+        if(list.length === 0) {
+            container.innerHTML = `<div style="text-align:center; padding:20px; color:#555;">NO TARGETS DESIGNATED</div>`;
             return;
         }
 
         const rows = list.map(t => `
             <tr>
                 <td>${this.renderOnlineIndicator(t.onlineState)}</td>
-                <td>${this.sanitize(t.name)}</td>
-                <td>${this.renderLevelBadge(t.level)}</td>
+                <td style="color:#fff; font-weight:bold;">${this.sanitize(t.name)}</td>
+                <td><span class="badge badge-travel">Lv${t.level}</span></td>
                 <td>${this.renderStatusBadge(t.status)}</td>
-                <td>${(t.colonelScore || 0).toFixed(1)}</td>
-                <td style="white-space:nowrap;">
-                    <span class="nib-att" data-id="${t.id}">⚔</span>
-                    <span class="nib-ana" data-id="${t.id}">🔍</span>
-                    <span class="nib-add" data-id="${t.id}">➕</span>
+                <td style="text-align:right;">
+                    <span class="act-btn act-att" data-id="${t.id}" title="Attack">⚔</span>
+                    <span class="act-btn act-ana" data-id="${t.id}" title="Spy">👁</span>
                 </td>
             </tr>
         `).join("");
 
-        dest.innerHTML = `
+        container.innerHTML = `
             <table class="nexus-table">
-                <thead>
-                    <tr><th>On</th><th>Name</th><th>Lv</th><th>Status</th><th>Scr</th><th>Act</th></tr>
-                </thead>
+                <thead><tr><th>STS</th><th>NAME</th><th>LVL</th><th>STATE</th><th style="text-align:right">ACT</th></tr></thead>
                 <tbody>${rows}</tbody>
             </table>
         `;
 
-        this.attachAttackButtons(dest);
-        this.attachAnalyzeButtons(dest);
-        this.attachAddTargetButtons(dest);
+        this.attachActionListeners(container);
     }
 
     /* ============================================================
-       CHAIN UI
+       FEATURE: AI / COLONEL UPLINK
        ============================================================ */
-    updateChainUI(chain = {}) {
-        const p = this.shadow.querySelector("#panel-chain");
+    buildColonelPanel() {
+        const p = this.shadow.querySelector("#panel-colonel");
         if (!p) return;
 
         p.innerHTML = `
-            <div class="tile-grid">
-                <div class="tile">
-                    <h3>Chain Status</h3>
-                    <p><b>Hits:</b> ${chain.hits || 0}</p>
-                    <p><b>Timeout:</b> ${chain.timeLeft || "00:00"}</p>
-                    <p><b>Pace:</b> ${chain.currentPace || 0}/min</p>
+            <div class="tile" style="border:none; background:transparent; padding:0;">
+                <div class="chat-window" id="col-chat">
+                    <div class="msg msg-ai">
+                        <strong>COLONEL AI:</strong> Uplink established. I am monitoring global war metrics. Awaiting query.
+                    </div>
                 </div>
-                <div class="tile">
-                    <h3>Directives</h3>
-                    <p>${this.sanitize(chain.warning || "Maintain pace.")}</p>
+                <div class="chat-input-area">
+                    <input type="text" id="col-input" class="chat-input" placeholder="Enter command or query...">
+                    <button id="col-send" class="chat-send">TX</button>
                 </div>
             </div>
         `;
-    }
 
-    renderChainLog(log = []) {
-        const p = this.shadow.querySelector("#panel-chain");
-        if (!p) return;
+        const input = p.querySelector("#col-input");
+        const send = p.querySelector("#col-send");
 
-        const entries = log.map(rec => `
-            <div class="chain-log-entry" style="font-size:11px; padding:2px 0; border-bottom:1px solid #222;">
-                <b>${this.sanitize(rec.player)}</b> → +${this.sanitize(rec.respect)}
-                <span style="float:right;color:#666;">${new Date(rec.time).toLocaleTimeString()}</span>
-            </div>
-        `).join("");
-
-        const box = document.createElement("div");
-        box.className = "tile";
-        box.innerHTML = `<h3>Chain Log</h3><div class="chain-log" style="max-height:150px;overflow-y:auto;">${entries}</div>`;
-        p.appendChild(box);
-    }
-
-    /* ============================================================
-       TABLE BUTTONS
-       ============================================================ */
-    attachAttackButtons(container) {
-        container.querySelectorAll(".nib-att").forEach(btn => {
-            btn.addEventListener("click", () => {
-                const id = btn.dataset.id;
-                if (!id) return;
-                window.location.href = `/loader.php?sid=attack&user2ID=${id}`;
-            });
-        });
-    }
-
-    attachAnalyzeButtons(container) {
-        container.querySelectorAll(".nib-ana").forEach(btn => {
-            btn.addEventListener("click", () => {
-                const id = btn.dataset.id;
-                if (!id) return;
-                this.general?.signals?.dispatch("REQUEST_PLAYER_SITREP", { id });
-            });
-        });
-    }
-
-    attachAddTargetButtons(container) {
-        container.querySelectorAll(".nib-add").forEach(btn => {
-            btn.addEventListener("click", () => {
-                const id = btn.dataset.id;
-                if (!id) return;
-                this.general?.signals?.dispatch("ADD_TARGET", { id });
-            });
-        });
-    }
-
-    /* ============================================================
-       COLONEL PANEL
-       ============================================================ */
-    buildColonelPanel() {
-        const panel = this.shadow.querySelector("#panel-colonel");
-        if (!panel) return;
-
-        panel.innerHTML = `
-            <div class="tile">
-                <h3>Ask the Colonel</h3>
-                <div class="col-msgs" style="height:300px;overflow-y:auto;border:1px solid #333;padding:8px;margin-bottom:8px;background:#050505;display:flex;flex-direction:column;gap:8px;"></div>
-                <input id="col-input" type="text" placeholder="Ask for strategy or status..." style="width:100%;box-sizing:border-box;margin-bottom:6px;">
-                <button id="col-send">TRANSMIT</button>
-            </div>
-        `;
-
-        const input = panel.querySelector("#col-input");
-        const send = panel.querySelector("#col-send");
-
-        const sendMsg = () => {
-            const q = input.value.trim();
-            if (!q) return;
+        const tx = () => {
+            const val = input.value.trim();
+            if(!val) return;
+            this.addChatMessage("user", val);
+            this.general?.signals?.dispatch("ASK_COLONEL", { question: val });
             input.value = "";
-            this.addColonelMessage("user", q);
-            this.general?.signals?.dispatch("ASK_COLONEL", { question: q });
         };
 
-        send.addEventListener("click", sendMsg);
-        input.addEventListener("keydown", e => e.key === "Enter" && sendMsg());
+        send.addEventListener("click", tx);
+        input.addEventListener("keydown", e => { if(e.key === "Enter") tx(); });
     }
 
-    addColonelMessage(side, msg) {
-        const panel = this.shadow.querySelector("#panel-colonel .col-msgs");
-        if (!panel) return;
-
+    addChatMessage(type, text) {
+        const win = this.shadow.querySelector("#col-chat");
+        if(!win) return;
+        
         const div = document.createElement("div");
-        div.className = side === "user" ? "col-user" : "col-reply";
-        div.textContent = msg;
-
-        panel.appendChild(div);
-        panel.scrollTop = panel.scrollHeight;
-    }
-
-    updateColonelAnswer(data) {
-        if (data?.answer) this.addColonelMessage("colonel", data.answer);
-    }
-
-    updateAnalyzeResult(data) {
-        if (data?.summary) this.addColonelMessage("colonel", "Analysis: " + data.summary);
+        div.className = `msg msg-${type === 'user' ? 'user' : 'ai'}`;
+        div.innerHTML = `<strong>${type==='user'?'OPERATOR':'COLONEL'}:</strong> ${this.sanitize(text)}`;
+        win.appendChild(div);
+        win.scrollTop = win.scrollHeight;
     }
 
     /* ============================================================
-       SETTINGS
+       SETTINGS & UTILS
        ============================================================ */
     buildSettingsPanel() {
-        const panel = this.shadow.querySelector("#panel-settings");
-        if (!panel) return;
-
-        panel.innerHTML = `
+        const p = this.shadow.querySelector("#panel-settings");
+        if(!p) return;
+        p.innerHTML = `
             <div class="tile">
-                <h3>UI Configuration</h3>
-                <label style="display:block;margin-bottom:10px;">Drawer Side:
-                    <select id="drawer-side" style="float:right;background:#222;color:#eee;border:1px solid #444;">
-                        <option value="left">Left</option>
-                        <option value="right">Right</option>
+                <h3>INTERFACE CONFIG</h3>
+                <label style="display:block; padding:10px; color:#ccc;">
+                    Dock Side
+                    <select id="set-side" style="float:right; background:#000; color:var(--c-neon); border:1px solid #333;">
+                        <option value="left">LEFT</option>
+                        <option value="right">RIGHT</option>
                     </select>
                 </label>
-                <p style="font-size:10px;color:#666;margin-top:20px;">Major v7.3 Deluxe Build. Connected to Nexus Core.</p>
+            </div>
+            <div style="text-align:center; margin-top:30px; color:#444; font-size:10px;">
+                MAJOR v8.0 BLACK OPS<br>AUTHORIZED USE ONLY
             </div>
         `;
     }
 
     attachSettingsLogic() {
-        const sideSelect = this.shadow.querySelector("#drawer-side");
-        if (!sideSelect) return;
-
-        sideSelect.value = this.drawerSide;
-
-        sideSelect.addEventListener("change", () => {
-            this.drawerSide = sideSelect.value;
-            this.updateDrawerSide();
-        });
-    }
-
-    /* ============================================================
-       HEATMAP UPDATES
-       ============================================================ */
-    updateHeatmaps(data = {}) {
-        const main = this.shadow.querySelector("#heatmap-main");
-        if (main && Array.isArray(data.onlineHeatmap)) {
-            this.drawHeatmap(main, data.onlineHeatmap);
-        }
-    }
-
-    updateTargetScores(data = {}) {
-        if (!data.scored) return;
-        const targets = {
-            personal: data.scored.filter(t => t.type === "personal"),
-            war:      data.scored.filter(t => t.type === "war"),
-            shared:   data.scored.filter(t => t.type === "shared")
-        };
-        this.renderTargetTables(targets);
-    }
-
-    routeGlobalSitrep(data) {
-        if (data) {
-            this.updateHeatmaps({
-                onlineHeatmap: data.heatmap,
-                statusHeatmap: data.statusHeatmap,
-                attackHeatmap: data.attackHeatmap,
-                anomalyHeatmap: data.anomalyHeatmap
+        const sel = this.shadow.querySelector("#set-side");
+        if(sel) {
+            sel.value = this.drawerSide;
+            sel.addEventListener("change", () => {
+                this.drawerSide = sel.value;
+                localStorage.setItem("nexus_drawer_side", sel.value);
+                this.updateDrawerSide();
             });
         }
     }
 
-    routeFactionSitrep(data) {
-        if (data?.members) this.renderFactionTable(data.members);
+    /* ============================================================
+       HELPER LOGIC (Drag, Sitrep, XSS)
+       ============================================================ */
+    sanitize(str) {
+        if (str === null || str === undefined) return "";
+        const temp = document.createElement('div');
+        temp.textContent = String(str);
+        return temp.innerHTML;
     }
 
-} // END CLASS Major
+    formatTime(sec) {
+        const m = Math.floor(sec / 60);
+        const s = Math.floor(sec % 60);
+        return `${m}:${s < 10 ? '0'+s : s}`;
+    }
+
+    renderStatusBadge(st) {
+        const s = (st || "").toLowerCase();
+        if (s.includes("hospital")) return `<span class="badge badge-hos">HOSP</span>`;
+        if (s.includes("jail")) return `<span class="badge badge-travel">JAIL</span>`; // Reusing style for now
+        if (s.includes("travel")) return `<span class="badge badge-travel">TRAVEL</span>`;
+        if (s.includes("online") || s.includes("okay")) return `<span class="badge badge-ok">ACTIVE</span>`;
+        return `<span class="badge" style="color:#555">OFFLINE</span>`;
+    }
+
+    renderOnlineIndicator(state) {
+        if(state === 'online') return `<span class="dot dot-on"></span>`;
+        return `<span class="dot dot-off"></span>`;
+    }
+
+    /* Routing Data from General */
+    startSitrepRouter() {
+        if(!this.general?.signals) return;
+        const sig = this.general.signals;
+
+        sig.listen("SITREP_UPDATE", d => {
+            if(d.user) this.updateUserUI(d.user);
+            if(d.chain) this.updateChainUI(d.chain);
+            if(d.targets) this.renderTargetTables(d.targets);
+        });
+
+        sig.listen("GLOBAL_SITREP_READY", d => {
+            // Draw heatmap
+            if(d.heatmap) {
+                const cvs = this.shadow.querySelector("#heatmap-main");
+                if(cvs) this.drawHeatmap(cvs, d.heatmap);
+            }
+        });
+
+        sig.listen("ASK_COLONEL_RESPONSE", d => {
+            if(d.answer) this.addChatMessage("ai", d.answer);
+        });
+    }
+    
+    drawHeatmap(canvas, data) {
+        const ctx = canvas.getContext("2d");
+        const w = canvas.width, h = canvas.height;
+        ctx.clearRect(0,0,w,h);
+        const bw = w / data.length;
+        const max = Math.max(...data, 1);
+        
+        data.forEach((val, i) => {
+            const hPct = val / max;
+            const alpha = Math.max(0.1, hPct);
+            ctx.fillStyle = `rgba(0, 243, 255, ${alpha})`;
+            ctx.fillRect(i*bw, h - (h*hPct), bw, h*hPct);
+        });
+    }
+
+    /* Actions */
+    attachActionListeners(root) {
+        root.querySelectorAll(".act-att").forEach(b => {
+            b.addEventListener("click", () => window.location.href = `/loader.php?sid=attack&user2ID=${b.dataset.id}`);
+        });
+        root.querySelectorAll(".act-ana").forEach(b => {
+            b.addEventListener("click", () => this.general.signals.dispatch("REQUEST_PLAYER_SITREP", {id: b.dataset.id}));
+        });
+    }
+
+    /* Button Dragging */
+    attachDragLogic() {
+        const btn = this.buttonEl;
+        const start = (e) => {
+            if (e.type === 'mousedown' && e.button !== 0) return;
+            e.preventDefault();
+            this.dragging = true;
+            this._isDragging = true;
+            const t = e.touches ? e.touches[0] : e;
+            const r = btn.getBoundingClientRect();
+            this.dragOffsetX = t.clientX - r.left;
+            this.dragOffsetY = t.clientY - r.top;
+            
+            const move = (ev) => {
+                const p = ev.touches ? ev.touches[0] : ev;
+                btn.style.left = (p.clientX - this.dragOffsetX) + "px";
+                btn.style.top = (p.clientY - this.dragOffsetY) + "px";
+                btn.style.bottom = "auto";
+            };
+            const stop = () => {
+                this.dragging = false;
+                setTimeout(() => this._isDragging = false, 100);
+                window.removeEventListener("mousemove", move);
+                window.removeEventListener("mouseup", stop);
+                window.removeEventListener("touchmove", move);
+                window.removeEventListener("touchend", stop);
+            };
+            window.addEventListener("mousemove", move);
+            window.addEventListener("mouseup", stop);
+            window.addEventListener("touchmove", move, {passive:false});
+            window.addEventListener("touchend", stop);
+        };
+        btn.addEventListener("mousedown", start);
+        btn.addEventListener("touchstart", start, {passive:false});
+    }
+    
+    attachButtonLogic() {
+        this.buttonEl.addEventListener("click", (e) => {
+            if(!this._isDragging) this.toggleDrawer();
+        });
+    }
+
+    toggleDrawer() {
+        this.drawerOpen = !this.drawerOpen;
+        this.updateDrawerSide();
+    }
+
+    updateDrawerSide() {
+        const cls = this.drawerSide === "right" ? 
+            (this.drawerOpen ? "drawer-open-right" : "") + " right" : 
+            (this.drawerOpen ? "drawer-open-left" : "");
+        this.drawerEl.className = cls;
+    }
+
+    attachResizeObserver() {
+        window.addEventListener("resize", () => this.updateDrawerSide());
+    }
+
+    /* Inline Scanner */
+    startInlineScanner() {
+        // Simple simplified version for 8.0
+        const obs = new MutationObserver((muts) => {
+            muts.forEach(m => m.addedNodes.forEach(n => {
+                if(n.nodeType === 1) this.scanNode(n);
+            }));
+        });
+        obs.observe(document.body, {childList:true, subtree:true});
+        this.scanNode(document.body);
+        this.mutationObserver = obs;
+    }
+
+    scanNode(root) {
+        if(!root.querySelectorAll) return;
+        root.querySelectorAll("a[href*='profiles.php?XID=']").forEach(a => {
+            if(a.dataset.nexus) return;
+            const id = a.href.match(/XID=(\d+)/)?.[1];
+            if(!id) return;
+            a.dataset.nexus = "1";
+            
+            const span = document.createElement("span");
+            span.className = "nexus-inline-wrap";
+            span.innerHTML = `
+                <div class="inline-btn act-att" data-id="${id}" title="Attack">⚔</div>
+                <div class="inline-btn act-ana" data-id="${id}" title="Spy">👁</div>
+            `;
+            a.after(span);
+            this.attachActionListeners(span);
+        });
+    }
+    
+    startOfficerReadyListener() {
+        if(this.general?.signals) {
+            this.general.signals.listen("OFFICER_READY", d => console.log(`[MAJOR] Officer Online: ${d.name}`));
+            setTimeout(() => this.general.signals.dispatch("OFFICER_READY", {name:"Major", version:"8.0"}), 500);
+        }
+    }
+
+} // End Class
 
 /* ============================================================
-   REGISTER WITH GENERAL
+   REGISTER
    ============================================================ */
-if (window.WAR_GENERAL && typeof window.WAR_GENERAL.register === "function") {
+if (window.WAR_GENERAL) {
     window.WAR_GENERAL.register("Major", Major);
 }
 
-} // END startMajor
-
+} // End startMajor
 })();
