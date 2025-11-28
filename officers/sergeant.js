@@ -1,4 +1,7 @@
-(function() {
+WARDBG("[OFFICER RAW LOAD] Sergeant.js");
+
+function NEXUS_SERGEANT_MODULE() {
+
     WARDBG("[OFFICER START] Sergeant.js");
 
     const config = {
@@ -19,7 +22,6 @@
         factionId: null,
         shared: [],
         writeQueue: [],
-        writeTimer: null,
         ready: false,
 
         init(G) {
@@ -28,7 +30,6 @@
             this.loadLocal();
             this.initFirebase().then(() => {
                 this.ready = true;
-                this.hook();
             });
         },
 
@@ -60,69 +61,17 @@
             this.auth = firebase.auth();
 
             try { await this.auth.signInAnonymously(); } catch {}
-        },
-
-        hook() {
-            this.general.signals.listen("RAW_INTEL", d => this.syncIntel(d));
-            this.general.signals.listen("REQUEST_ADD_SHARED_TARGET", t => this.addShared(t));
-        },
-
-        syncIntel(d) {
-            if (!d?.faction?.id) return;
-            this.factionId = d.faction.id;
-            this.syncMembers(d.faction.members || {});
-        },
-
-        syncMembers(members) {
-            if (!this.ready || !this.factionId) return;
-            const base = `/factions/${this.factionId}/members`;
-
-            for (const [id, m] of Object.entries(members)) {
-                this.enqueue(`${base}/${id}`, {
-                    id,
-                    name: m.name,
-                    level: m.level || 0,
-                    updated: Date.now()
-                });
-            }
-        },
-
-        addShared(t) {
-            if (!t?.id || !t?.name) return;
-            t.timestamp = Date.now();
-
-            this.shared = this.shared.filter(x => x.id !== t.id);
-            this.shared.push(t);
-
-            this.saveLocal();
-
-            this.general.signals.dispatch("SHARED_TARGETS_UPDATED", this.shared);
-
-            if (this.ready && this.factionId)
-                this.enqueue(`/factions/${this.factionId}/targets/${t.id}`, t);
-        },
-
-        enqueue(path, value) {
-            this.writeQueue.push({ path, value });
-            clearTimeout(this.writeTimer);
-            this.writeTimer = setTimeout(() => this.flush(), 1500);
-        },
-
-        flush() {
-            if (!this.ready) return;
-
-            const q = [...this.writeQueue];
-            this.writeQueue.length = 0;
-
-            q.forEach(item => {
-                this.db.ref(item.path).set(item.value);
-            });
         }
     };
 
     WARDBG("[OFFICER END] Sergeant.js");
 
-    if (unsafeWindow.WAR_GENERAL)
-        unsafeWindow.WAR_GENERAL.register("Sergeant", Sergeant);
+    if (window.WAR_GENERAL) {
+        WARDBG("Sergeant registering with WAR_GENERAL");
+        window.WAR_GENERAL.register("Sergeant", Sergeant);
+    } else {
+        WARDBG("ERROR: window.WAR_GENERAL missing during Sergeant registration.");
+    }
+}
 
-})();
+NEXUS_SERGEANT_MODULE();
