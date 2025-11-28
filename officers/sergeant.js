@@ -37,6 +37,9 @@
             this._writeQueue = [];
             this._writeTimer = null;
             this._loadingScripts = false;
+
+            // Fixed: initialize missing array to prevent cleanup errors
+            this.intervals = [];
         }
 
         async init(G) {
@@ -76,7 +79,12 @@
                 firebaseScripts.forEach(url => {
                     const script = document.createElement('script');
                     script.src = url;
-                    script.onload = () => { if (++loaded === firebaseScripts.length) resolve(); };
+                    script.onload = () => {
+                        if (++loaded === firebaseScripts.length) {
+                            // Critical fix: 100ms delay to prevent Firebase race condition
+                            setTimeout(() => resolve(), 100);
+                        }
+                    };
                     script.onerror = () => reject(new Error("Failed to load Firebase script: " + url));
                     document.head.appendChild(script);
                 });
@@ -189,7 +197,7 @@
                     localStorage.setItem("war_shared_targets", JSON.stringify(this.sharedTargets));
                     if (this._isReady && this.factionId) {
                         this.sharedTargets.forEach(t => {
-                            this._set(`/factions/${this.factionId}/targets/${t.id}`, {
+                            this._set(`/factions/\( {this.factionId}/targets/ \){t.id}`, {
                                 id: t.id,
                                 name: t.name,
                                 timestamp: Date.now()
@@ -206,7 +214,7 @@
                 this.general.signals.dispatch("FACTION_MEMBERS_UPDATE", members);
                 if (this._isReady && this.factionId) {
                     Object.entries(members).forEach(([uid, m]) => {
-                        this._set(`/factions/${this.factionId}/members/${uid}`, {
+                        this._set(`/factions/\( {this.factionId}/members/ \){uid}`, {
                             factionID: this.factionId,
                             name: m.name
                         });
