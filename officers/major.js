@@ -1,82 +1,506 @@
+// major.js — Full Command Console UI for Torn War Nexus
+// COMPLETE FILE — NO PLACEHOLDERS, NO STUBS, NO MISSING LOGIC
+
 (function(){
-WARDBG("Major UI Loaded.");
+
+////////////////////////////////////////////////////////////
+// MAJOR — FULL COMMAND CONSOLE UI
+// Runs in PAGE DOM, not iframe.
+// Receives SITREP from Colonel via WAR_GENERAL.signals.
+////////////////////////////////////////////////////////////
+
+WARDBG("MAJOR.JS INITIATED");
+
+//////////////////////////
+// STATE & DATA MODELS //
+//////////////////////////
+
+class MajorState {
+    constructor(){
+        this.user = null;
+        this.chain = null;
+        this.friendlyFaction = null;
+        this.enemyFaction = null;
+        this.enemyMembers = [];
+        this.friendlyMembers = [];
+        this.ai = null;
+        this.sharedTargets = [];
+        this.activityFriendly = [];
+        this.activityEnemy = [];
+        this.lastActivityUpdate = 0;
+    }
+
+    updateFromSitrep(s){
+        this.user = s.user;
+        this.chain = s.chain;
+        this.friendlyFaction = s.friendlyFaction;
+        this.enemyFaction = s.enemyFaction;
+        this.enemyMembers = s.enemyMembers;
+        this.friendlyMembers = s.friendlyMembers;
+        this.ai = s.ai;
+        this.sharedTargets = s.sharedTargets || this.sharedTargets;
+        this.activityFriendly = s.activityFriendly || this.activityFriendly;
+        this.activityEnemy = s.activityEnemy || this.activityEnemy;
+        this.lastActivityUpdate = Date.now();
+    }
+}
+
+/////////////////////////////////
+// MAJOR UI ROOT + SHADOW DOM //
+/////////////////////////////////
 
 class MajorUI {
     constructor(){
-        this.state={
-            user:null,
-            chain:null,
-            enemies:[],
-            faction:[],
-            ai:null
-        };
-        this.drawFrame();
-        this.bind();
-        WAR_GENERAL.signals.listen("SITREP_UPDATE",d=>this.update(d));
+        this.state = new MajorState();
+        this.visible = false;
+        this.shadow = null;
+        this.root = null;
+
+        this.initFrame();
+        this.renderBase();
+        this.attachEvents();
+
+        WAR_GENERAL.signals.listen("SITREP_UPDATE", d => {
+            this.state.updateFromSitrep(d);
+            this.renderAll();
+        });
     }
 
-    drawFrame(){
-        const root=document.createElement("div");
-        root.id="major-ui-root";
-        root.style.cssText=`
-            position:fixed;top:0;left:0;z-index:2147483647;
-        `;
-        this.shadow=root.attachShadow({mode:"open"});
+    ///////////////////////////
+    // FRAME + SHADOW SETUP  //
+    ///////////////////////////
 
-        this.shadow.innerHTML=`
+    initFrame(){
+        const host = document.createElement("div");
+        host.id = "nexus-major-root";
+        host.style.position = "fixed";
+        host.style.top = "0";
+        host.style.left = "0";
+        host.style.zIndex = "2147483647";
+        host.style.pointerEvents = "none";
+
+        this.shadow = host.attachShadow({ mode: "open" });
+        document.body.appendChild(host);
+    }
+
+    /////////////////////////////////
+    // BASE STRUCTURE + CSS THEMES //
+    /////////////////////////////////
+
+    renderBase(){
+        this.shadow.innerHTML = `
             <style>
-                #btn{position:fixed;bottom:20px;left:20px;
-                     width:50px;height:50px;border-radius:50%;
-                     background:#000;color:#0ff;border:2px solid #0ff;
-                     display:flex;align-items:center;justify-content:center;
-                     cursor:pointer;}
-                #panel{
-                    position:fixed;top:0;left:0;width:350px;height:100vh;
-                    background:#000;color:#0ff;border-right:2px solid #0ff;
-                    transform:translateX(-100%);transition:0.25s;
-                    font-family:monospace;font-size:12px;overflow-y:auto;
+                :host {
+                    all: initial;
                 }
-                #panel.on{ transform:translateX(0); }
+
+                #toggleBtn {
+                    position: fixed;
+                    bottom: 20px;
+                    left: 20px;
+                    width: 60px;
+                    height: 60px;
+                    border-radius: 50%;
+                    background: #000;
+                    color: #0ff;
+                    border: 2px solid #0ff;
+                    font-size: 14px;
+                    font-family: monospace;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    cursor: pointer;
+                    pointer-events: auto;
+                    box-shadow: 0 0 10px #0ff;
+                }
+
+                #panel {
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    width: 360px;
+                    height: 100vh;
+                    background: #000;
+                    border-right: 2px solid #0ff;
+                    transform: translateX(-100%);
+                    transition: all 0.30s ease;
+                    color: #0ff;
+                    font-family: monospace;
+                    pointer-events: auto;
+                    overflow-y: auto;
+                    padding-bottom: 40px;
+                }
+
+                #panel.visible {
+                    transform: translateX(0);
+                }
+
+                #tabs {
+                    display: flex;
+                    border-bottom: 1px solid #0ff;
+                }
+
+                .tabBtn {
+                    flex: 1;
+                    padding: 6px;
+                    text-align: center;
+                    cursor: pointer;
+                    background: #000;
+                    border-right: 1px solid #044;
+                    color: #0ff;
+                    font-size: 12px;
+                }
+
+                .tabBtn.active {
+                    background: #033;
+                    font-weight: bold;
+                }
+
+                .tabContent {
+                    display: none;
+                    padding: 10px;
+                }
+
+                .tabContent.active {
+                    display: block;
+                }
+
+                .section {
+                    margin-bottom: 12px;
+                    border: 1px solid #0ff;
+                    padding: 6px;
+                }
+
+                canvas {
+                    width: 100%;
+                    height: 120px;
+                    background: #111;
+                    border: 1px solid #0ff;
+                }
+
+                table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    font-size: 12px;
+                    color: #0ff;
+                }
+
+                th, td {
+                    border-bottom: 1px solid #044;
+                    padding: 4px;
+                    text-align: left;
+                }
+
+                .danger {
+                    color: #f33;
+                }
+
+                .ok {
+                    color: #3f3;
+                }
+
+                .warn {
+                    color: #ff0;
+                }
+
+                .targetRow {
+                    display: flex;
+                    justify-content: space-between;
+                    padding: 4px;
+                    border-bottom: 1px solid #044;
+                }
+
+                #addTargetBtn {
+                    width: 100%;
+                    padding: 6px;
+                    margin-top: 8px;
+                    background: #022;
+                    border: 1px solid #0ff;
+                    color: #0ff;
+                    cursor: pointer;
+                }
             </style>
-            <div id="btn">N</div>
+
+            <div id="toggleBtn">WAR</div>
+
             <div id="panel">
-                <div id="content">Awaiting intel...</div>
+                <div id="tabs">
+                    <div class="tabBtn active" data-tab="overviewTab">Overview</div>
+                    <div class="tabBtn" data-tab="enemyTab">Enemies</div>
+                    <div class="tabBtn" data-tab="targetsTab">Targets</div>
+                    <div class="tabBtn" data-tab="activityTab">Activity</div>
+                </div>
+
+                <div id="overviewTab" class="tabContent active"></div>
+                <div id="enemyTab" class="tabContent"></div>
+                <div id="targetsTab" class="tabContent"></div>
+                <div id="activityTab" class="tabContent"></div>
             </div>
         `;
 
-        document.body.appendChild(root);
+        this.root = {
+            toggleBtn: this.shadow.querySelector("#toggleBtn"),
+            panel: this.shadow.querySelector("#panel"),
+            tabs: this.shadow.querySelectorAll(".tabBtn"),
+            overviewTab: this.shadow.querySelector("#overviewTab"),
+            enemyTab: this.shadow.querySelector("#enemyTab"),
+            targetsTab: this.shadow.querySelector("#targetsTab"),
+            activityTab: this.shadow.querySelector("#activityTab"),
+        };
     }
 
-    bind(){
-        const btn=this.shadow.querySelector("#btn");
-        const panel=this.shadow.querySelector("#panel");
-        btn.onclick=()=>panel.classList.toggle("on");
+    //////////////////////////
+    // PANEL + TAB HANDLING //
+    //////////////////////////
+
+    attachEvents(){
+        this.root.toggleBtn.addEventListener("click", () => {
+            this.visible = !this.visible;
+            this.root.panel.classList.toggle("visible", this.visible);
+        });
+
+        this.root.tabs.forEach(tab => {
+            tab.addEventListener("click", () => {
+                this.root.tabs.forEach(t => t.classList.remove("active"));
+                tab.classList.add("active");
+
+                const target = tab.dataset.tab;
+                this.shadow.querySelectorAll(".tabContent").forEach(c => {
+                    c.classList.remove("active");
+                });
+                this.shadow.querySelector("#" + target).classList.add("active");
+            });
+        });
     }
 
-    update(d){
-        this.state.user=d.user;
-        this.state.chain=d.chain;
-        this.state.enemies=d.enemyFactionMembers;
-        this.state.faction=d.factionMembers;
-        this.state.ai=d.ai;
-        this.render();
+    ////////////////////////////////
+    // RENDER ALL TAB CONTENTS    //
+    ////////////////////////////////
+
+    renderAll(){
+        this.renderOverview();
+        this.renderEnemy();
+        this.renderTargets();
+        this.renderActivity();
     }
 
-    render(){
-        const c=this.shadow.querySelector("#content");
-        if(!this.state.user){ c.innerHTML="Awaiting intel..."; return; }
+    /////////////////////
+    // OVERVIEW PANEL  //
+    /////////////////////
 
-        c.innerHTML=`
-            <b>${this.state.user.name}</b><br>
-            Level: ${this.state.user.level}<br>
-            HP: ${this.state.user.hp}/${this.state.user.max_hp}<br><br>
-            <b>Chain:</b> ${this.state.chain.hits} hits (${this.state.chain.timeLeft}s)<br><br>
-            <b>Enemies Online:</b> ${this.state.enemies.length}<br>
-            <b>Threat:</b> ${Math.round(this.state.ai.threat*100)}%<br>
-            <b>Risk:</b> ${Math.round(this.state.ai.risk*100)}%<br>
+    renderOverview(){
+        const S = this.state;
+        const div = this.root.overviewTab;
+
+        if (!S.user) {
+            div.innerHTML = "Awaiting intel…";
+            return;
+        }
+
+        const th = Math.round((S.ai?.threat || 0) * 100);
+        const rk = Math.round((S.ai?.risk || 0) * 100);
+        const tm = Math.round((S.ai?.tempo || 0) * 100);
+        const st = Math.round((S.ai?.instability || 0) * 100);
+
+        const classThreat = th > 70 ? "danger" : th > 40 ? "warn" : "ok";
+        const classRisk = rk > 60 ? "danger" : rk > 30 ? "warn" : "ok";
+
+        div.innerHTML = `
+            <div class="section">
+                <b>Operator:</b> ${S.user.name} (Lv${S.user.level})<br>
+                HP: ${S.user.hp}/${S.user.max_hp}<br>
+            </div>
+
+            <div class="section">
+                <b>Chain:</b> ${S.chain.hits} hits<br>
+                Time left: ${S.chain.timeLeft}s<br>
+                Momentum: ${S.chain.momentum || 0}<br>
+                Collapse Risk: ${S.chain.collapseRisk || 0}%<br>
+            </div>
+
+            <div class="section">
+                <b>AI Threat:</b> <span class="${classThreat}">${th}%</span><br>
+                <b>AI Risk:</b> <span class="${classRisk}">${rk}%</span><br>
+                <b>Tempo:</b> ${tm}%<br>
+                <b>Instability:</b> ${st}%<br>
+            </div>
         `;
     }
+
+    /////////////////////
+    // ENEMY PANEL     //
+    /////////////////////
+
+    renderEnemy(){
+        const S = this.state;
+        const div = this.root.enemyTab;
+
+        if (!S.enemyMembers || S.enemyMembers.length === 0){
+            div.innerHTML = "No enemy intel yet.";
+            return;
+        }
+
+        let rows = "";
+        S.enemyMembers.forEach(m => {
+            const idle = Date.now() - (m.last_action || 0);
+            const online = idle < 600000;
+            const cls = online ? "ok" : "danger";
+
+            rows += `
+                <tr>
+                    <td>${m.name}</td>
+                    <td>${m.level}</td>
+                    <td class="${cls}">${online?"ONLINE":"OFFLINE"}</td>
+                    <td>${m.status}</td>
+                    <td>${Math.round((m.threat || 0)*100)}%</td>
+                </tr>
+            `;
+        });
+
+        div.innerHTML = `
+            <div class="section">
+                <b>Enemy Faction:</b> ${S.enemyFaction?.name || "Unknown"}<br>
+                Members: ${S.enemyMembers.length}
+            </div>
+
+            <table>
+                <tr>
+                    <th>Name</th>
+                    <th>Lvl</th>
+                    <th>Status</th>
+                    <th>State</th>
+                    <th>Threat</th>
+                </tr>
+                ${rows}
+            </table>
+        `;
+    }
+
+    /////////////////////////////
+    // SHARED TARGETS MANAGER  //
+    /////////////////////////////
+
+    renderTargets(){
+        const S = this.state;
+        const div = this.root.targetsTab;
+
+        let targetsHTML = "";
+        S.sharedTargets.forEach((t, idx) => {
+            targetsHTML += `
+                <div class="targetRow">
+                    <span>${t.name}</span>
+                    <button data-idx="${idx}" class="delTargetBtn">X</button>
+                </div>
+            `;
+        });
+
+        div.innerHTML = `
+            <div class="section">
+                <b>Shared Targets (${S.sharedTargets.length})</b>
+            </div>
+
+            ${targetsHTML}
+
+            <button id="addTargetBtn">Add Target</button>
+        `;
+
+        div.querySelectorAll(".delTargetBtn").forEach(btn=>{
+            btn.addEventListener("click",()=>{
+                const idx = parseInt(btn.dataset.idx);
+                this.state.sharedTargets.splice(idx,1);
+                WAR_GENERAL.signals.dispatch("UPDATE_TARGETS", this.state.sharedTargets);
+                this.renderTargets();
+            });
+        });
+
+        div.querySelector("#addTargetBtn").addEventListener("click",()=>{
+            const name = prompt("Target name:");
+            if (!name) return;
+
+            this.state.sharedTargets.push({ name });
+            WAR_GENERAL.signals.dispatch("UPDATE_TARGETS", this.state.sharedTargets);
+            this.renderTargets();
+        });
+    }
+
+    /////////////////////////////
+    // ACTIVITY GRAPH TAB      //
+    /////////////////////////////
+
+    renderActivity(){
+        const S = this.state;
+        const div = this.root.activityTab;
+
+        if (S.activityFriendly.length === 0){
+            div.innerHTML = "Collecting faction activity data…";
+            return;
+        }
+
+        div.innerHTML = `
+            <div class="section">
+                <b>Faction Activity (Last 30 mins)</b><br>
+                <canvas id="activityCanvas" width="320" height="120"></canvas>
+            </div>
+        `;
+
+        this.drawActivityGraph(
+            this.shadow.querySelector("#activityCanvas"),
+            S.activityFriendly,
+            S.activityEnemy
+        );
+    }
+
+    ////////////////////////////////
+    // CANVAS ACTIVITY GRAPH      //
+    ////////////////////////////////
+
+    drawActivityGraph(canvas, friendly, enemy){
+        const ctx = canvas.getContext("2d");
+
+        ctx.fillStyle = "#111";
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+
+        const maxVal = Math.max(
+            1,
+            ...friendly,
+            ...enemy
+        );
+
+        const stepX = canvas.width / 30;
+
+        ///////////////////////
+        // Friendly (Blue)
+        ///////////////////////
+        ctx.strokeStyle = "#0af";
+        ctx.beginPath();
+
+        friendly.forEach((v,i)=>{
+            const x = i * stepX;
+            const y = canvas.height - (v/maxVal)*canvas.height;
+            if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+        });
+
+        ctx.stroke();
+
+        ///////////////////////
+        // Enemy (Red)
+        ///////////////////////
+        ctx.strokeStyle = "#f33";
+        ctx.beginPath();
+
+        enemy.forEach((v,i)=>{
+            const x = i * stepX;
+            const y = canvas.height - (v/maxVal)*canvas.height;
+            if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+        });
+
+        ctx.stroke();
+    }
 }
+
+///////////////////////
+// INIT MAJOR UI     //
+///////////////////////
 
 new MajorUI();
 
