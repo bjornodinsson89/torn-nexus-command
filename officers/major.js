@@ -12,74 +12,56 @@ class Major {
         this.drawerOpen = false;
         this.drawerSide = "left";
         this.buttonEl = null;
+        this.dragOffX = 0;
+        this.dragOffY = 0;
         this.dragging = false;
-        this._isDragging = false;
-        this.dragOffsetX = 0;
-        this.dragOffsetY = 0;
         this.activeTab = "overview";
         this.targetSubTab = "personal";
-        this.factionSort = { key: 'level', dir: 'desc' };
-        this.mutationObserver = null;
-        this.intervals = [];
         this.store = {
             user: null,
             chain: null,
             faction: [],
             enemies: [],
-            ai: null,
-            targets: { personal:[], war:[], shared:[] },
-            heatmap: []
+            targets: { personal: [], war: [], shared: [] },
+            ai: null
         };
     }
 
-    init(General) {
-        this.general = General;
+    init(G) {
+        this.general = G;
         this.createHost();
-        this.renderBaseHTML();
-        this.applyStyles();
-        this.attachButtonLogic();
-        this.attachDragLogic();
-        this.attachResizeObserver();
-        this.startInlineScanner();
+        this.renderBase();
+        this.renderStyles();
+        this.bindTabs();
+        this.bindDrawer();
         this.bindSignals();
-
-        const savedSide = localStorage.getItem("nexus_drawer_side");
-        if(savedSide) this.drawerSide = savedSide;
-
-        this.updateDrawerSide();
-        this.buildColonelPanel();
-        this.renderActivePanel();
+        this.renderPanel();
     }
 
     bindSignals() {
         this.general.signals.listen("SITREP_UPDATE", d => {
-            if(d.user) this.store.user = d.user;
-            if(d.chain) this.store.chain = d.chain;
-            if(d.factionMembers) this.store.faction = d.factionMembers;
-            if(d.enemyFactionMembers) this.store.enemies = d.enemyFactionMembers;
-            if(d.ai) this.store.ai = d.ai;
-            if(d.targets) this.store.targets = d.targets;
+            if (d.user) this.store.user = d.user;
+            if (d.chain) this.store.chain = d.chain;
+            if (d.factionMembers) this.store.faction = d.factionMembers;
+            if (d.enemyFactionMembers) this.store.enemies = d.enemyFactionMembers;
+            if (d.targets) this.store.targets = d.targets;
+            if (d.ai) this.store.ai = d.ai;
 
-            if(this.activeTab === "overview") this.renderOverview();
-            if(this.activeTab === "chain") this.renderChain();
-            if(this.activeTab === "faction") this.renderFaction();
-            if(this.activeTab === "enemy") this.renderEnemies();
-            if(this.activeTab === "targets") this.renderTargets();
+            this.renderPanel();
         });
 
         this.general.signals.listen("MAJOR_SHARED_TARGETS", d => {
             this.store.targets.shared = d.shared || [];
-            if(this.activeTab === "targets") this.renderTargets();
+            if (this.activeTab === "targets") this.renderTargets();
         });
 
         this.general.signals.listen("ASK_COLONEL_RESPONSE", d => {
-            const win = this.shadow.querySelector("#col-msgs");
-            if(win && d.answer) {
-                const div = document.createElement("div");
-                div.className = "msg msg-ai";
-                div.textContent = "[AI] " + d.answer;
-                win.appendChild(div);
-                win.scrollTop = win.scrollHeight;
+            const w = this.shadow.querySelector("#ai-log");
+            if (w && d.answer) {
+                const msg = document.createElement("div");
+                msg.className = "ai-msg";
+                msg.textContent = d.answer;
+                w.appendChild(msg);
             }
         });
     }
@@ -96,367 +78,181 @@ class Major {
         document.body.appendChild(this.host);
     }
 
-    renderBaseHTML() {
+    renderBase() {
         this.shadow.innerHTML = `
-            <div id="nexus-container">
-                <button id="nexus-toggle" class="nexus-btn">
-                    <div class="scanner-line"></div>
-                    <span class="btn-icon">N</span>
-                </button>
-                <div id="nexus-drawer">
-                    <div class="drawer-header">
-                        <div class="header-glitch">WAR NEXUS // V8.1</div>
-                        <span id="close-drawer" class="control-btn">×</span>
-                    </div>
-                    <div id="nexus-tabs">
-                        <button class="nexus-tab active" data-tab="overview">OVERVIEW</button>
-                        <button class="nexus-tab" data-tab="faction">FACTION</button>
-                        <button class="nexus-tab" data-tab="enemy">ENEMIES</button>
-                        <button class="nexus-tab" data-tab="chain">CHAIN</button>
-                        <button class="nexus-tab" data-tab="targets">TARGETS</button>
-                        <button class="nexus-tab" data-tab="colonel">AI UPLINK</button>
-                        <button class="nexus-tab" data-tab="settings">CONFIG</button>
-                    </div>
-                    <div id="nexus-panels">
-                        <div id="panel-overview" class="panel active"><div class="loader-text">AWAITING DATALINK...</div></div>
-                        <div id="panel-faction" class="panel"></div>
-                        <div id="panel-enemy" class="panel"></div>
-                        <div id="panel-chain" class="panel"></div>
-                        <div id="panel-targets" class="panel"></div>
-                        <div id="panel-colonel" class="panel"></div>
-                        <div id="panel-settings" class="panel"></div>
-                    </div>
+            <div id="btn">N</div>
+            <div id="drawer">
+                <div id="tabs">
+                    <button data-t="overview" class="on">OVERVIEW</button>
+                    <button data-t="faction">FACTION</button>
+                    <button data-t="enemy">ENEMIES</button>
+                    <button data-t="chain">CHAIN</button>
+                    <button data-t="targets">TARGETS</button>
+                    <button data-t="ai">AI</button>
+                </div>
+                <div id="panels">
+                    <div id="p-overview" class="panel on"></div>
+                    <div id="p-faction" class="panel"></div>
+                    <div id="p-enemy" class="panel"></div>
+                    <div id="p-chain" class="panel"></div>
+                    <div id="p-targets" class="panel"></div>
+                    <div id="p-ai" class="panel"></div>
                 </div>
             </div>
         `;
+    }
 
-        this.drawerEl = this.shadow.querySelector("#nexus-drawer");
-        this.buttonEl = this.shadow.querySelector("#nexus-toggle");
+    renderStyles() {
+        const s = document.createElement("style");
+        s.textContent = `
+            :host { all: initial; }
+            #btn { position: fixed; bottom:20px; left:20px; width:50px; height:50px; background:#000; border:2px solid #00f3ff; border-radius:50%; color:#00f3ff; display:flex; align-items:center; justify-content:center; cursor:pointer; z-index:9999; }
+            #drawer { position: fixed; top:0; left:0; width:380px; height:100vh; background:#050505; color:#00f3ff; transform: translateX(-100%); transition:0.3s; z-index:9998; overflow-y:auto; border-right:2px solid #00f3ff; }
+            #drawer.on { transform: translateX(0); }
+            #tabs { display:flex; border-bottom:1px solid #00f3ff; }
+            #tabs button { flex:1; background:#000; color:#00f3ff; padding:10px; border:none; cursor:pointer; }
+            #tabs button.on { background:#00f3ff; color:#000; }
+            .panel { display:none; padding:10px; }
+            .panel.on { display:block; }
+            table { width:100%; color:#fff; font-size:12px; border-collapse: collapse; }
+            td, th { padding:4px; border-bottom:1px solid #222; }
+            #ai-log { background:#111; color:#0ff; height:200px; overflow-y:auto; padding:10px; }
+            .ai-msg { margin-bottom:6px; }
+        `;
+        this.shadow.appendChild(s);
+    }
 
-        this.shadow.querySelectorAll(".nexus-tab").forEach(btn => {
-            btn.addEventListener("click", () => {
-                this.shadow.querySelectorAll(".nexus-tab").forEach(b => b.classList.remove("active"));
-                btn.classList.add("active");
-                this.activeTab = btn.dataset.tab;
-                this.renderActivePanel();
+    bindTabs() {
+        this.shadow.querySelectorAll("#tabs button").forEach(b => {
+            b.addEventListener("click", () => {
+                this.shadow.querySelectorAll("#tabs button").forEach(x => x.classList.remove("on"));
+                this.shadow.querySelectorAll(".panel").forEach(x => x.classList.remove("on"));
+                b.classList.add("on");
+                this.activeTab = b.dataset.t;
+                this.shadow.querySelector(`#p-${this.activeTab}`).classList.add("on");
+                this.renderPanel();
             });
         });
-
-        this.shadow.querySelector("#close-drawer").addEventListener("click", () => this.toggleDrawer());
-        this.buildSettingsPanel();
     }
 
-    applyStyles() {
-        const style = document.createElement("style");
-        style.textContent = `
-            :host { all: initial; font-family: 'Segoe UI', Roboto, sans-serif; --c-neon: #00f3ff; --c-alert: #ff003c; --c-bg: #050505; }
-            * { box-sizing: border-box; }
-            #nexus-drawer { position: fixed; top: 0; width: 420px; height: 100vh; background: var(--c-bg); border-right: 2px solid var(--c-neon); transform: translateX(-100%); transition: transform 0.25s ease; display: flex; flex-direction: column; z-index: 10000; }
-            #nexus-drawer.right { border-right: none; border-left: 2px solid var(--c-neon); transform: translateX(100%); }
-            .drawer-open-left { transform: translateX(0) !important; }
-            .drawer-open-right { transform: translateX(0) !important; }
-            .drawer-header { padding: 15px; color: var(--c-neon); font-family: 'Courier New'; font-size: 18px; font-weight: bold; }
-            .nexus-tab { flex: 1; padding: 10px; cursor: pointer; color: #666; border-bottom: 2px solid transparent; }
-            .nexus-tab.active { color: var(--c-neon); border-bottom: 2px solid var(--c-neon); }
-            .panel { display: none; padding: 10px; }
-            .panel.active { display: block; }
-            .nexus-btn { position: fixed; bottom:20px; left:20px; width:50px; height:50px; background:#000; border:2px solid var(--c-neon); border-radius:50%; color:var(--c-neon); display:flex; align-items:center; justify-content:center; font-size:20px; cursor:pointer; z-index:99999; }
-            .tile { background:#111; border-left:3px solid #333; margin-bottom:10px; padding:10px; }
-        `;
-        this.shadow.appendChild(style);
+    bindDrawer() {
+        const btn = this.shadow.querySelector("#btn");
+        const dr = this.shadow.querySelector("#drawer");
+        btn.addEventListener("click", () => {
+            dr.classList.toggle("on");
+        });
     }
 
-    renderActivePanel() {
-        this.shadow.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
-        const target = this.shadow.querySelector(`#panel-${this.activeTab}`);
-        if(target) target.classList.add("active");
+    renderPanel() {
         if (this.activeTab === "overview") this.renderOverview();
         if (this.activeTab === "faction") this.renderFaction();
         if (this.activeTab === "enemy") this.renderEnemies();
         if (this.activeTab === "chain") this.renderChain();
         if (this.activeTab === "targets") this.renderTargets();
+        if (this.activeTab === "ai") this.renderAI();
     }
 
     renderOverview() {
-        if(!this.store.user || !this.store.ai) return;
+        const p = this.shadow.querySelector("#p-overview");
+        if (!this.store.user || !this.store.ai) {
+            p.textContent = "Awaiting data...";
+            return;
+        }
 
-        const p = this.shadow.querySelector("#panel-overview");
         const u = this.store.user;
         const a = this.store.ai;
 
-        const threatValue = Math.round(a.threat * 100);
-        const threatColor = a.threat > 0.5 ? 'var(--c-alert)' : 'var(--c-neon)';
-
         p.innerHTML = `
-            <div class="tile">
-                <h3>OPERATOR: <span style="color:#fff">${this.sanitize(u.name)}</span></h3>
-                <div style="margin-top:10px;">LEVEL: ${u.level}</div>
-                <div>HEALTH: ${u.hp}/${u.max_hp}</div>
-            </div>
-            <div class="tile">
-                <h3>THREAT</h3>
-                <div style="font-size:24px; color:${threatColor}; text-align:center;">${threatValue}%</div>
-            </div>
+            <div>Operator: ${u.name}</div>
+            <div>Level: ${u.level}</div>
+            <div>Health: ${u.hp}/${u.max_hp}</div>
+            <div>Threat: ${Math.round(a.threat * 100)}%</div>
+            <div>Risk: ${Math.round(a.risk * 100)}%</div>
         `;
     }
 
     renderFaction() {
-        const p = this.shadow.querySelector("#panel-faction");
+        const p = this.shadow.querySelector("#p-faction");
         const list = this.store.faction;
-        if(!list || !list.length) { p.innerHTML = "NO FACTION DATA"; return; }
+        if (!list.length) { p.textContent = "No faction data"; return; }
 
-        const rows = list.map(m => `
+        p.innerHTML = "<table>" + list.map(m => `
             <tr>
-                <td>${this.renderOnlineDot(m.onlineState)}</td>
-                <td>${this.sanitize(m.name)}</td>
+                <td>${m.name}</td>
                 <td>${m.level}</td>
-                <td>${this.renderStatusBadge(m.status)}</td>
+                <td>${m.status}</td>
             </tr>
-        `).join("");
-
-        p.innerHTML = `
-            <table class="nexus-table">
-                <thead><tr><th>●</th><th>NAME</th><th>LVL</th><th>STS</th></tr></thead>
-                <tbody>${rows}</tbody>
-            </table>
-        `;
+        `).join("") + "</table>";
     }
 
     renderEnemies() {
-        const p = this.shadow.querySelector("#panel-enemy");
-        const list = this.store.enemies || [];
-        if(!list.length) { p.innerHTML = "NO HOSTILES"; return; }
+        const p = this.shadow.querySelector("#p-enemy");
+        const list = this.store.enemies;
+        if (!list.length) { p.textContent = "No hostiles"; return; }
 
-        const rows = list.map(m => `
+        p.innerHTML = "<table>" + list.map(m => `
             <tr>
-                <td>${this.renderOnlineDot(m.onlineState)}</td>
-                <td>${this.sanitize(m.name)}</td>
+                <td>${m.name}</td>
                 <td>${m.level}</td>
-                <td>${this.renderStatusBadge(m.status)}</td>
-                <td><span class="act-btn act-att" data-id="${m.id}">Attack</span></td>
+                <td>${m.status}</td>
             </tr>
-        `).join("");
-
-        p.innerHTML = `
-            <table class="nexus-table">
-                <thead><tr><th>●</th><th>NAME</th><th>LVL</th><th>STS</th><th>A</th></tr></thead>
-                <tbody>${rows}</tbody>
-            </table>
-        `;
-        this.attachActionListeners(p);
+        `).join("") + "</table>";
     }
 
     renderChain() {
-        const p = this.shadow.querySelector("#panel-chain");
+        const p = this.shadow.querySelector("#p-chain");
         const c = this.store.chain;
-        if(!c) { p.innerHTML = "CHAIN INACTIVE"; return; }
-
+        if (!c) { p.textContent = "No chain data"; return; }
         p.innerHTML = `
-            <div class="tile">
-                <h3>CHAIN STATUS</h3>
-                <div>Hits: ${c.hits}</div>
-                <div>Timeout: ${c.timeLeft}s</div>
-            </div>
+            <div>Hits: ${c.hits}</div>
+            <div>Timeout: ${c.timeLeft}s</div>
         `;
     }
 
     renderTargets() {
-        const p = this.shadow.querySelector("#panel-targets");
-        const sub = this.targetSubTab;
+        const p = this.shadow.querySelector("#p-targets");
+        const list = this.store.targets[this.targetSubTab] || [];
+        if (!list.length) { p.textContent = "No targets"; return; }
 
-        const list = this.store.targets[sub] || [];
-
-        const rows = list.map(t => `
+        p.innerHTML = "<table>" + list.map(t => `
             <tr>
-                <td>${this.renderOnlineDot(t.onlineState)}</td>
-                <td>${this.sanitize(t.name)}</td>
+                <td>${t.name}</td>
                 <td>${t.level}</td>
-                <td>${this.renderStatusBadge(t.status)}</td>
-                <td><span class="act-btn act-att" data-id="${t.id}">Attack</span></td>
+                <td>${t.status}</td>
             </tr>
-        `).join("");
-
-        p.innerHTML = `
-            <table class="nexus-table">
-                <thead><tr><th>●</th><th>NAME</th><th>LVL</th><th>STS</th><th>A</th></tr></thead>
-                <tbody>${rows}</tbody>
-            </table>
-        `;
-
-        this.attachActionListeners(p);
+        `).join("") + "</table>";
     }
 
-    buildColonelPanel() {
-        const p = this.shadow.querySelector("#panel-colonel");
+    renderAI() {
+        const p = this.shadow.querySelector("#p-ai");
         p.innerHTML = `
-            <div class="tile">
-                <h3>TACTICAL AI UPLINK</h3>
-                <div class="chat-win" id="col-msgs">
-                    <div class="msg msg-ai">[AI] Online.</div>
-                </div>
-                <input id="col-input" class="chat-input" placeholder="Enter command...">
-            </div>
+            <div id="ai-log"></div>
+            <input id="ai-input" placeholder="Command..." style="width:100%; padding:5px; background:#111; color:#0ff; border:1px solid #00f3ff;">
         `;
-        const input = p.querySelector("#col-input");
-        const win = p.querySelector("#col-msgs");
+        const input = p.querySelector("#ai-input");
+        const log = p.querySelector("#ai-log");
 
         input.addEventListener("keydown", e => {
-            if(e.key === "Enter" && input.value.trim()) {
-                const txt = input.value.trim();
-                const div = document.createElement("div");
-                div.className = "msg msg-user";
-                div.textContent = txt;
-                win.appendChild(div);
-
-                this.general.signals.dispatch("ASK_COLONEL", { question: txt });
+            if (e.key === "Enter" && input.value.trim()) {
+                const q = input.value.trim();
+                const msg = document.createElement("div");
+                msg.className = "ai-msg";
+                msg.textContent = "> " + q;
+                log.appendChild(msg);
+                this.general.signals.dispatch("ASK_COLONEL", { question: q });
                 input.value = "";
-                win.scrollTop = win.scrollHeight;
             }
-        });
-    }
-
-    buildSettingsPanel() {
-        const p = this.shadow.querySelector("#panel-settings");
-        p.innerHTML = `
-            <div class="tile">
-                <h3>CONFIG</h3>
-                <select id="dock-side">
-                    <option value="left">Left</option>
-                    <option value="right">Right</option>
-                </select>
-            </div>
-        `;
-
-        const sel = p.querySelector("#dock-side");
-        sel.value = this.drawerSide;
-        sel.addEventListener("change", () => {
-            this.drawerSide = sel.value;
-            localStorage.setItem("nexus_drawer_side", sel.value);
-            this.updateDrawerSide();
-        });
-    }
-
-    sanitize(s) { const d=document.createElement('div'); d.textContent=s||""; return d.innerHTML; }
-
-    renderStatusBadge(st) {
-        const s = (st||"").toLowerCase();
-        if(s.includes("hosp")) return `<span style="color:#f55">HOSP</span>`;
-        if(s.includes("jail")) return `<span style="color:#f55">JAIL</span>`;
-        if(s.includes("travel")) return `<span style="color:#aaa">FLY</span>`;
-        return `<span style="color:#5f5">OK</span>`;
-    }
-
-    renderOnlineDot(st) {
-        return `<span style="color:${st==='online'?'#0f0':'#444'}; font-size:14px;">●</span>`;
-    }
-
-    attachButtonLogic() {
-        this.buttonEl.addEventListener("click", () => {
-            if(!this._isDragging) this.toggleDrawer();
-        });
-    }
-
-    toggleDrawer() {
-        this.drawerOpen = !this.drawerOpen;
-        this.updateDrawerSide();
-    }
-
-    updateDrawerSide() {
-        if (this.drawerSide === "right")
-            this.drawerEl.className = this.drawerOpen ? "drawer-open-right right" : "right";
-        else
-            this.drawerEl.className = this.drawerOpen ? "drawer-open-left" : "";
-    }
-
-    attachDragLogic() {
-        const btn = this.buttonEl;
-        const start = e => {
-            if(e.type==='mousedown' && e.button!==0) return;
-            e.preventDefault();
-            this.dragging = true;
-            this._isDragging = true;
-            const t = e.touches ? e.touches[0] : e;
-            const r = btn.getBoundingClientRect();
-            this.dragOffsetX = t.clientX - r.left;
-            this.dragOffsetY = t.clientY - r.top;
-
-            const move = ev => {
-                const p = ev.touches ? ev.touches[0] : ev;
-                btn.style.left = (p.clientX - this.dragOffsetX)+"px";
-                btn.style.top = (p.clientY - this.dragOffsetY)+"px";
-            };
-
-            const stop = () => {
-                this.dragging = false;
-                setTimeout(() => this._isDragging = false, 120);
-                window.removeEventListener("mousemove",move);
-                window.removeEventListener("mouseup",stop);
-                window.removeEventListener("touchmove",move);
-                window.removeEventListener("touchend",stop);
-            };
-
-            window.addEventListener("mousemove",move);
-            window.addEventListener("mouseup",stop);
-            window.addEventListener("touchmove",move,{ passive:false });
-            window.addEventListener("touchend",stop);
-        };
-
-        btn.addEventListener("mousedown", start);
-        btn.addEventListener("touchstart", start, { passive:false });
-    }
-
-    attachResizeObserver() {
-        window.addEventListener("resize", () => this.updateDrawerSide());
-    }
-
-    drawHeatmap(canvas, data) {
-        const ctx = canvas.getContext("2d");
-        const w = canvas.width, h = canvas.height;
-        ctx.clearRect(0,0,w,h);
-        const bw = w / data.length;
-        const max = Math.max(...data,1);
-        data.forEach((val, i) => {
-            const pct = val/max;
-            ctx.fillStyle = `rgba(0,243,255,${pct})`;
-            ctx.fillRect(i*bw, h-(h*pct), bw, h*pct);
-        });
-    }
-
-    startInlineScanner() {
-        const scan = () => {
-            document.querySelectorAll("a[href*='profiles.php?XID=']").forEach(a => {
-                if(a.dataset.nexus) return;
-                const id = a.href.match(/XID=(\d+)/)?.[1];
-                if(id) {
-                    a.dataset.nexus = "1";
-                    const s = document.createElement("span");
-                    s.innerHTML = `<span class="act-btn act-att" data-id="${id}" style="font-size:10px; margin-left:4px;">Attack</span>`;
-                    a.after(s);
-                    this.attachActionListeners(s);
-                }
-            });
-        };
-        this.mutationObserver = new MutationObserver(scan);
-        this.mutationObserver.observe(document.body, { childList:true, subtree:true });
-        scan();
-    }
-
-    attachActionListeners(root) {
-        root.querySelectorAll(".act-att").forEach(b => {
-            b.addEventListener("click", () => window.location.href = `/loader.php?sid=attack&user2ID=${b.dataset.id}`);
         });
     }
 }
 
-function waitForGeneral(attempt=0) {
+function wait(at=0) {
     if (window.WAR_GENERAL && typeof window.WAR_GENERAL.register === "function") {
         window.WAR_GENERAL.register("Major", new Major());
         return;
     }
-    const delay = Math.min(1000, 100 * Math.pow(1.6, attempt));
-    if (attempt < 80) setTimeout(() => waitForGeneral(attempt+1), delay);
+    if (at < 40) setTimeout(() => wait(at+1), 200);
 }
 
-waitForGeneral();
-
+wait();
 })();
