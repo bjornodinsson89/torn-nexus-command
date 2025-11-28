@@ -1,5 +1,6 @@
 (function() {
     WARDBG("[OFFICER START] Lieutenant.js");
+
     const Lieutenant = {
         general: null,
         interval: null,
@@ -73,7 +74,10 @@
             };
         }
     };
+
     WARDBG("[OFFICER END] Lieutenant.js");
 
-    if (window.WAR_GENERAL) WAR_GENERAL.register("Lieutenant", Lieutenant);
+    if (unsafeWindow.WAR_GENERAL)
+        unsafeWindow.WAR_GENERAL.register("Lieutenant", Lieutenant);
+
 })();
