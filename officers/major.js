@@ -474,7 +474,6 @@ class Major {
         this.attachSettingsLogic();
         this.applyExtendedStyles();
     }
-} 
 
 /* ============================================================
    REGISTER WITH GENERAL
