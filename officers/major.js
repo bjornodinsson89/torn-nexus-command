@@ -1,56 +1,151 @@
 /********************************************************************
- * MAJOR v7.3 DELUXE – THE WARLORD GUI
- * • Every visual feature restored and made fully functional
- * • Zero bugs. Zero bloat. Pure domination.
+ * MAJOR v7.3 DELUXE 
  ********************************************************************/
+
+Check now
 
 (function() {
 "use strict";
 
-if (!window.WAR_GENERAL) {
-    console.warn("[MAJOR] WAR_GENERAL not detected — Major aborted.");
-    return;
+/* ============================================================
+   SAFE BOOTSTRAP
+   ============================================================ */
+function waitForGeneral(attempt = 0) {
+    if (window.WAR_GENERAL && typeof window.WAR_GENERAL.register === "function") {
+        console.log("[MAJOR] WAR_GENERAL detected.");
+        startMajor();
+        return;
+    }
+
+    const delay = Math.min(1000, 100 * Math.pow(1.5, attempt)); // exponential backoff
+    if (attempt < 120) { // ~60 seconds max
+        setTimeout(() => waitForGeneral(attempt + 1), delay);
+    } else {
+        console.error("[MAJOR] WAR_GENERAL not found after ~60 seconds.");
+    }
 }
+waitForGeneral();
+
+/* ============================================================
+   START MAJOR
+   ============================================================ */
+function startMajor() {
 
 class Major {
     constructor() {
         this.general = null;
+        
         this.host = null;
         this.shadow = null;
+
         this.drawerEl = null;
-        this.buttonEl = null;
         this.drawerOpen = false;
-        this.drawerSide = localStorage.getItem("nexus_drawer_side") || "left";
+        this.drawerSide = "left";
+
+        this.buttonEl = null;
+        this.buttonPosition = { bottom: 20, left: 20 };
+
+        this.dragging = false;
+        this._isDragging = false;
+        this.dragOffsetX = 0;
+        this.dragOffsetY = 0;
+
         this.activeTab = "main";
         this.targetSubTab = "personal";
-        this._isDragging = false;
+        this.tabsContainer = null;
+        this.panelsContainer = null;
+
+        this.mutationObserver = null;
+
         this.officerStatus = {
-            general: "OFFLINE", lieutenant: "OFFLINE", sergeant: "OFFLINE",
-            major: "OFFLINE", colonel: "OFFLINE"
+            general: "OFFLINE",
+            lieutenant: "OFFLINE",
+            sergeant: "OFFLINE",
+            major: "OFFLINE",
+            colonel: "OFFLINE"
         };
-        this.chainLog = [];
+
+        this.intervals = [];
+        this.boundHandlers = new Map();
     }
 
+    /* ============================================================
+       SANITIZATION HELPER (XSS DEFENSE)
+       ============================================================ */
+    sanitize(value) {
+        if (value === null || value === undefined) return "";
+        const s = String(value);
+        const div = document.createElement("div");
+        div.textContent = s;
+        return div.innerHTML;
+    }
+
+    /* ============================================================
+       INIT
+       ============================================================ */
     init(General) {
         this.general = General;
+
         this.createHost();
         this.renderBaseHTML();
-        this.applyStyles();
+        this.applyBaseStyles();
+
         this.attachButtonLogic();
         this.attachDragLogic();
         this.attachResizeObserver();
-        this.finalizeUI();
+
+        this.updateDrawerSide();
+        this.applyAnimationPreferences();
+
         this.startInlineScanner();
         this.startSitrepRouter();
         this.startOfficerReadyListener();
-        this.general.signals.dispatch("MAJOR_READY", {});
-        console.log("%c[MAJOR v7.3 DELUXE] WARLORD GUI Online", "color:#00eaff;font-weight:bold;");
+
+        this.finalizeUI();
+
+        if (this.general?.signals) {
+            this.general.signals.dispatch("UI_READY", {});
+            this.general.signals.dispatch("MAJOR_READY", {});
+        }
     }
 
+    /* ============================================================
+       DESTROY 
+       ============================================================ */
+    destroy() {
+        console.log("[MAJOR] Destroy — cleaning up.");
+        
+        this.intervals.forEach(id => clearInterval(id));
+        this.intervals = [];
+
+        if (this.mutationObserver) {
+            this.mutationObserver.disconnect();
+            this.mutationObserver = null;
+        }
+
+        this.boundHandlers.forEach((handler, event) => {
+            window.removeEventListener(event, handler);
+        });
+        this.boundHandlers.clear();
+
+        if (this.host?.parentNode) {
+            this.host.remove();
+        }
+
+        this.host = this.shadow = this.drawerEl = this.buttonEl = null;
+    }
+
+    /* ============================================================
+       HOST + SHADOW DOM
+       ============================================================ */
     createHost() {
+        if (this.host) return;
+
         this.host = document.createElement("div");
         this.host.id = "nexus-major-host";
-        this.host.style.cssText = "position:fixed;top:0;left:0;width:0;height:0;z-index:999999;";
+        this.host.style.position = "fixed";
+        this.host.style.zIndex = "999999";
+
         this.shadow = this.host.attachShadow({ mode: "open" });
         document.body.appendChild(this.host);
     }
@@ -58,22 +153,13 @@ class Major {
     renderBaseHTML() {
         this.shadow.innerHTML = `
             <div id="nexus-container">
-                <button id="nexus-toggle" class="nexus-btn">WAR</button>
+                <button id="nexus-toggle" class="nexus-btn">Menu</button>
                 <div id="nexus-drawer">
                     <div class="drawer-header">
                         <span class="drawer-title">WAR NEXUS</span>
-                        <span id="officer-status">Initializing...</span>
                     </div>
                     <div id="nexus-tabs"></div>
-                    <div id="nexus-panels">
-                        <div id="panel-main" class="panel"></div>
-                        <div id="panel-chain" class="panel"></div>
-                        <div id="panel-faction" class="panel"></div>
-                        <div id="panel-enemy" class="panel"></div>
-                        <div id="panel-targets" class="panel"></div>
-                        <div id="panel-colonel" class="panel"></div>
-                        <div id="panel-settings" class="panel"></div>
-                    </div>
+                    <div id="nexus-panels"></div>
                 </div>
             </div>
         `;
@@ -81,269 +167,178 @@ class Major {
         this.drawerEl = this.shadow.querySelector("#nexus-drawer");
         this.buttonEl = this.shadow.querySelector("#nexus-toggle");
         this.tabsContainer = this.shadow.querySelector("#nexus-tabs");
+        this.panelsContainer = this.shadow.querySelector("#nexus-panels");
+
         this.buildTabs();
-        this.updateDrawerSide();
+        this.buildPanels();
     }
 
-    applyStyles() {
+    }
+
+    applyBaseStyles() {
         const style = document.createElement("style");
         style.textContent = `
-            :host { all: initial; font-family: 'Courier New', monospace; }
-            #nexus-container { position: fixed; bottom: 0; left: 0; pointer-events: none; }
-            .nexus-btn { pointer-events: auto; position: fixed; width: 56px; height: 56px; border-radius: 50%; background: #0f0f0f; color: #00ffaa; font-size: 24px; font-weight: bold; border: 3px solid #00ffaa; box-shadow: 0 0 20px #00ffaa; cursor: pointer; transition: all 0.2s; bottom: 20px; left: 20px; }
-            .nexus-btn:hover { transform: scale(1.15); box-shadow: 0 0 30px #00ffaa; }
-            #nexus-drawer { position: fixed; top: 0; width: 380px; height: 100vh; background: rgba(5,5,15,0.97); backdrop-filter: blur(10px); border-right: 3px solid #00ffaa; box-shadow: 0 0 40px #00ffaa40; transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1); pointer-events: auto; transform: translateX(-100%); }
-            #nexus-drawer.right { border-left: 3px solid #00ffaa; border-right: none; transform: translateX(100%); }
-            .drawer-open-left { transform: translateX(0)!important; }
-            .drawer-open-right { transform: translateX(0)!important; }
-            .drawer-header { padding: 16px; background: linear-gradient(90deg, #001a1a, #000); border-bottom: 2px solid #00ffaa; color: #00ffaa; font-size: 20px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
-            #officer-status { font-size: 12px; color: #00ffaa; }
-            #nexus-tabs { display: flex; background: #000; border-bottom: 1px solid #003f3f; }
-            .nexus-tab { flex: 1; padding: 12px; background: #001111; color: #88ffdd; border: none; cursor: pointer; transition: all 0.2s; }
-            .nexus-tab.active { background: #003333; color: #00ffaa; box-shadow: inset 0 -4px #00ffaa; }
-            .panel { display: none; padding: 12px; height: calc(100vh - 120px); overflow-y: auto; }
-            .panel.active { display: block; }
-            .tile { background: rgba(0,30,40,0.6); border: 1px solid #00ffaa33; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
-            .tile h3 { margin: 0 0 10px 0; color: #00ffaa; }
-            .badge { padding: 4px 10px; border-radius: 6px; font-weight: bold; font-size: 11px; display: inline-block; margin: 2px; text-shadow: 0 0 8px currentColor; }
-            .badge-ok { background: #004400; color: #00ff00; }
-            .badge-hos { background: #440000; color: #ff3333; }
-            .badge-jail { background: #663300; color: #ffaa00; }
-            .badge-travel { background: #444400; color: #ffff66; }
-            .badge-lo { background: #002b36; color: #66d9ef; }
-            .badge-med { background: #5f3b00; color: #f39c12; }
-            .badge-hi { background: #8e44ad; color: #ff6b6b; }
-            .badge-xtr { background: #c0392b; color: white; animation: pulse 2s infinite; }
-            @keyframes pulse { 0%,100% { box-shadow: 0 0 10px #c0392b; } 50% { box-shadow: 0 0 20px #ff0000; } }
-            .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; margin-right: 6px; box-shadow: 0 0 10px currentColor; }
-            .dot-on { background: #00ff00; }
-            .dot-recent { background: #ffff00; }
-            .dot-danger { background: #ff0000; animation: pulse 1s infinite; }
-            .dot-off { background: #666; }
-            .nexus-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-            .nexus-table th { background: #001a1a; color: #00ffaa; padding: 8px; text-align: left; }
-            .nexus-table td { padding: 6px; border-bottom: 1px solid #003f3f; }
-            .nexus-table tr:hover { background: rgba(0,255,170,0.1); }
-            canvas { background: #000; border: 1px solid #003f3f; border-radius: 6px; }
-            .nexus-inline-buttons { display: inline-flex; gap: 6px; margin-left: 8px; }
-            .nib { cursor: pointer; padding: 4px 8px; background: #001f28; border: 1px solid #00eaff; border-radius: 6px; color: #00eaff; font-size: 11px; transition: all 0.2s; }
-            .nib:hover { background: #00eaff; color: black; transform: scale(1.2); }
-            .col-msgs { background: #000; border: 1px solid #003f3f; height: 300px; overflow-y: auto; padding: 10px; margin: 10px 0; border-radius: 8px; }
-            .col-msg { padding: 10px; margin: 8px 0; border-radius: 8px; max-width: 80%; }
-            .col-user { background: #003f22; color: #66ff99; align-self: flex-end; }
-            .col-reply { background: #00252d; color: #00eaff; }
-            #col-input { width: 100%; padding: 12px; background: #00161b; border: 1px solid #00eaff; color: white; border-radius: 8px; margin-bottom: 8px; }
-            #col-send { width: 100%; padding: 12px; background: #00eaff; color: black; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
-            #col-send:hover { background: #00ffaa; }
-            .chain-log { max-height: 300px; overflow-y: auto; }
-            .chain-log-entry { padding: 8px; border-bottom: 1px solid #003f3f; display: flex; justify-content: space-between; font-size: 12px; }
-            .chain-log-entry .respect { color: #00ff00; font-weight: bold; }
+            :host { all: initial; }
+            #nexus-container {
+                position: fixed;
+                bottom: 0; left: 0;
+                pointer-events: none;
+                --drawer-transition: 0.32s;
+                --button-transition: 0.15s;
+            }
+            .nexus-btn {
+                pointer-events: auto;
+                position: fixed;
+                width: 50px; height: 50px;
+                border-radius: 50%;
+                font-size: 20px;
+                border: none;
+                background: #0a0a0a;
+                color: #00c8ff;
+                box-shadow: 0 0 8px #00c8ff;
+                cursor: pointer;
+                transition: transform var(--button-transition), box-shadow var(--button-transition);
+                user-select: none;
+                bottom: 20px; left: 20px;
+            }
+            .nexus-btn:hover {
+                transform: scale(1.1);
+                box-shadow: 0 0 12px #00e1ff;
+            }
+            #nexus-drawer {
+                position: fixed;
+                top: 0;
+                width: 360px;
+                height: 100vh;
+                background: rgba(0,0,0,0.92);
+                backdrop-filter: blur(6px);
+                border-right: 2px solid #00c8ff;
+                transform: translateX(-100%);
+                transition: transform var(--drawer-transition);
+                pointer-events: auto;
+            }
+            #nexus-drawer.right {
+                border-right: none;
+                border-left: 2px solid #00c8ff;
+                transform: translateX(100%);
+            }
+            .drawer-open-left { transform: translateX(0) !important; }
+            .drawer-closed-left { transform: translateX(-100%) !important; }
+            .drawer-open-right { transform: translateX(0) !important; }
+            .drawer-closed-right { transform: translateX(100%) !important; }
         `;
         this.shadow.appendChild(style);
     }
 
-    buildTabs() {
-        const tabs = ["main","chain","faction","enemy","targets","colonel","settings"];
-        this.tabsContainer.innerHTML = tabs.map(t => 
-            `<button class="nexus-tab \( {t==='main'?'active':''}" data-tab=" \){t}">${t.charAt(0).toUpperCase() + t.slice(1)}</button>`
-        ).join("");
-        this.tabsContainer.querySelectorAll(".nexus-tab").forEach(btn => {
-            btn.onclick = () => {
-                this.activeTab = btn.dataset.tab;
-                this.tabsContainer.querySelectorAll(".nexus-tab").forEach(b => b.classList.toggle("active", b===btn));
-                this.shadow.querySelectorAll(".panel").forEach(p => p.classList.toggle("active", p.id === `panel-${this.activeTab}`));
-            };
-        });
-    }
+    /* ============================================================
+       TABS & PANELS 
+       ============================================================ */
+    buildTabs() { }
+    buildPanels() { }
+    renderActivePanel() { }
 
-    finalizeUI() {
-        this.buildColonelPanel();
-        this.buildSettingsPanel();
-        this.attachSettingsLogic();
-        this.shadow.querySelector("#panel-main").classList.add("active");
-    }
-
-    buildColonelPanel() {
-        const p = this.shadow.querySelector("#panel-colonel");
-        p.innerHTML = `
-            <div class="tile">
-                <h3>Ask the Colonel</h3>
-                <div class="col-msgs"></div>
-                <input id="col-input" type="text" placeholder="What should we do, Colonel?">
-                <button id="col-send">Send</button>
-            </div>
-        `;
-        const input = p.querySelector("#col-input");
-        const send = p.querySelector("#col-send");
-        const sendMsg = () => {
-            const q = input.value.trim();
-            if (!q) return;
-            input.value = "";
-            this.addColonelMessage("user", q);
-            this.general.signals.dispatch("ASK_COLONEL", { question: q });
-        };
-        send.onclick = sendMsg;
-        input.onkeypress = e => e.key === "Enter" && sendMsg();
-    }
-
-    addColonelMessage(side, msg) {
-        const box = this.shadow.querySelector(".col-msgs");
-        const div = document.createElement("div");
-        div.className = `col-msg ${side === "colonel" ? "col-reply" : "col-user"}`;
-        div.innerHTML = `<small>\( {new Date().toLocaleTimeString()}</small><br> \){msg}`;
-        box.appendChild(div);
-        box.scrollTop = box.scrollHeight;
-    }
-
-    updateColonelAnswer(data) {
-        if (data?.answer) this.addColonelMessage("colonel", data.answer);
-    }
-
-    buildSettingsPanel() {
-        const p = this.shadow.querySelector("#panel-settings");
-        p.innerHTML = `
-            <div class="tile"><h3>Drawer Side</h3>
-                <select id="set-drawer-side"><option value="left">Left</option><option value="right">Right</option></select>
-            </div>
-            <div class="tile"><h3>Chain Alerts</h3>
-                <label>Critical: <input type="range" id="alert-critical" min="5" max="60" value="15"></label>
-                <label>High: <input type="range" id="alert-high" min="10" max="120" value="30"></label>
-                <label>Medium: <input type="range" id="alert-med" min="20" max="180" value="60"></label>
-            </div>
-        `;
-    }
-
-    attachSettingsLogic() {
-        const cfg = JSON.parse(localStorage.getItem("nexusSettings") || "{}");
-        const side = this.shadow.querySelector("#set-drawer-side");
-        side.value = cfg.drawerSide || "left";
-        side.onchange = () => { this.drawerSide = side.value; localStorage.setItem("nexusSettings", JSON.stringify({drawerSide: side.value})); this.updateDrawerSide(); };
-        this.updateDrawerSide();
-    }
-
-    startInlineScanner() {
-        setInterval(() => {
-            document.querySelectorAll("a[href*='profiles.php?XID=']:not([data-nexus])").forEach(link => {
-                const id = link.href.match(/XID=(\d+)/)?.[1];
-                if (!id) return;
-                const box = document.createElement("span");
-                box.className = "nexus-inline-buttons";
-                box.innerHTML = `Attack Analyze Add Share`;
-                link.insertAdjacentElement("afterend", box);
-                link.dataset.nexus = "1";
-                box.querySelectorAll(".nib").forEach(b => b.onclick = e => {
-                    e.stopPropagation();
-                    if (b.textContent.includes("Attack")) window.location.href = `/loader.php?sid=attack&user2ID=${id}`;
-                    if (b.textContent.includes("Analyze")) this.general.signals.dispatch("REQUEST_PLAYER_SITREP", {id});
-                    if (b.textContent.includes("Add")) this.general.signals.dispatch("ADD_TARGET", {id});
-                });
-            });
-        }, 1500);
-    }
-
-    startSitrepRouter() {
-        const s = this.general.signals;
-        s.listen("SITREP_UPDATE", d => this.routeSitrep(d));
-        s.listen("COLONEL_ANSWER", d => this.updateColonelAnswer(d));
-    }
-
-    routeSitrep(sitrep) {
-        if (sitrep.chain) this.updateChainUI(sitrep.chain);
-        if (sitrep.chainLog) this.renderChainLog(sitrep.chainLog);
-        if (sitrep.ai?.heatmaps?.online) this.drawHeatmap(this.shadow.querySelector("#heatmap-main"), sitrep.ai.heatmaps.online);
-    }
-
-    updateChainUI(chain) {
-        const p = this.shadow.querySelector("#panel-chain");
-        if (!p) return;
-        p.innerHTML = `
-            <div class="tile"><h3>Chain Status</h3>
-                <p>Hits: <b>\( {chain.current}</b> • Timeout: <b> \){chain.timeout}s</b></p>
-                <p>Pace: <b>\( {chain.pace}/min</b> • Risk: <b> \){chain.dropRisk}</b></p>
-            </div>
-            <div class="tile"><h3>Chain Log</h3><div class="chain-log" id="chain-log"></div></div>
-            <canvas id="heatmap-main" width="340" height="100"></canvas>
-        `;
-        this.renderChainLog(this.chainLog);
-    }
-
-    renderChainLog(log) {
-        this.chainLog = log || [];
-        const box = this.shadow.querySelector("#chain-log");
-        if (!box) return;
-        box.innerHTML = this.chainLog.slice(-20).map(e => `
-            <div class="chain-log-entry">
-                <span>${e.player}</span>
-                <span class="respect">+${e.respect}</span>
-                <span>${new Date(e.time).toLocaleTimeString()}</span>
-            </div>
-        `).join("");
-        box.scrollTop = box.scrollHeight;
-    }
-
-    drawHeatmap(canvas, data) {
-        if (!canvas) return;
-        const ctx = canvas.getContext("2d");
-        const w = canvas.width, h = canvas.height;
-        const bw = w / 24;
-        ctx.clearRect(0,0,w,h);
-        const max = Math.max(...data, 1);
-        data.forEach((v, i) => {
-            const intensity = v / max;
-            ctx.fillStyle = `rgba(0, \( {200 + 55*intensity}, 255, \){intensity})`;
-            ctx.fillRect(i * bw, h - v/max * h, bw - 1, h);
+    /* ============================================================
+       BUTTON & DRAWER LOGIC
+       ============================================================ */
+    attachButtonLogic() {
+        this.buttonEl.addEventListener("click", (e) => {
+            if (this._isDragging || this.dragging) return;
+            e.preventDefault();
+            this.toggleDrawer();
         });
     }
 
     toggleDrawer() {
         this.drawerOpen = !this.drawerOpen;
-        this.drawerEl.classList.toggle("drawer-open-left", this.drawerOpen && this.drawerSide === "left");
-        this.drawerEl.classList.toggle("drawer-open-right", this.drawerOpen && this.drawerSide === "right");
+        this.applyDrawerClasses();
+    }
+
+    applyDrawerClasses() {
+        const side = this.drawerSide === "right" ? "right" : "left";
+        this.drawerEl.className = this.drawerOpen 
+            ? `drawer-open-${side === "right" ? "open-right" : "open-left"}`
+            : `drawer-closed-${side === "right" ? "right" : "left"}`;
+        if (side === "right") this.drawerEl.classList.add("right");
+        else this.drawerEl.classList.remove("right");
     }
 
     updateDrawerSide() {
-        this.drawerEl.classList.toggle("right", this.drawerSide === "right");
-        this.toggleDrawer(); this.toggleDrawer(); // Force refresh
+        this.applyDrawerClasses();
     }
 
-    attachButtonLogic() {
-        this.buttonEl.onclick = () => { if (!this._isDragging) this.toggleDrawer(); };
-    }
-
+    /* ============================================================
+       DRAG LOGIC 
+       ============================================================ */
     attachDragLogic() {
-        let dragging = false;
-        this.buttonEl.onmousedown = this.buttonEl.ontouchstart = e => {
-            dragging = true;
-            this._isDragging = false;
+        const startDrag = (e) => {
+            if (e.button !== 0) return; 
+            e.preventDefault();
+
+            this.dragging = true;
+            this._isDragging = true;
+
+            const pt = e.touches ? e.touches[0] : e;
             const rect = this.buttonEl.getBoundingClientRect();
-            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-            const offsetX = clientX - rect.left;
-            const offsetY = clientY - rect.top;
+            this.dragOffsetX = pt.clientX - rect.left;
+            this.dragOffsetY = pt.clientY - rect.top;
 
-            const move = ev => {
-                if (!dragging) return;
-                this._isDragging = true;
-                const x = (ev.touches ? ev.touches[0].clientX : ev.clientX) - offsetX;
-                const y = (ev.touches ? ev.touches[0].clientY : ev.clientY) - offsetY;
-                this.buttonEl.style.left = x + "px";
-                this.buttonEl.style.top = y + "px";
+            const moveHandler = (e) => {
+                const pt = e.touches ? e.touches[0] : e;
+                let x = pt.clientX - this.dragOffsetX;
+                let y = pt.clientY - this.dragOffsetY;
+
+                const clamped = this.clampButtonPosition(x, y);
+                this.buttonEl.style.left = clamped.x + "px";
+                this.buttonEl.style.top = clamped.y + "px";
                 this.buttonEl.style.bottom = "auto";
+                this.buttonEl.style.right = "auto";
             };
 
-            const up = () => {
-                dragging = false;
-                setTimeout(() => this._isDragging = false, 100);
-                window.removeEventListener("mousemove", move);
-                window.removeEventListener("touchmove", move);
-                window.removeEventListener("mouseup", up);
-                window.removeEventListener("touchend", up);
+            const endDrag = () => {
+                this.dragging = false;
+                setTimeout(() => this._isDragging = false, 120);
+
+                window.removeEventListener("mousemove", moveHandler);
+                window.removeEventListener("mouseup", endDrag);
+                window.removeEventListener("touchmove", moveHandler);
+                window.removeEventListener("touchend", endDrag);
+                window.removeEventListener("touchcancel", endDrag);
+
+                this.boundHandlers.delete("mousemove");
+                this.boundHandlers.delete("mouseup");
+                this.boundHandlers.delete("touchmove");
+                this.boundHandlers.delete("touchend");
+                this.boundHandlers.delete("touchcancel");
             };
 
-            window.addEventListener("mousemove", move);
-            window.addEventListener("touchmove", move, { passive: false });
-            window.addEventListener("mouseup", up);
-            window.addEventListener("touchend", up);
+            // Attach only now
+            window.addEventListener("mousemove", moveHandler);
+            window.addEventListener("mouseup", endDrag);
+            window.addEventListener("touchmove", moveHandler, { passive: false });
+            window.addEventListener("touchend", endDrag);
+            window.addEventListener("touchcancel", endDrag);
+
+            // Store for destroy()
+            this.boundHandlers.set("mousemove", moveHandler);
+            this.boundHandlers.set("mouseup", endDrag);
+            this.boundHandlers.set("touchmove", moveHandler);
+            this.boundHandlers.set("touchend", endDrag);
+            this.boundHandlers.set("touchcancel", endDrag);
+        };
+
+        this.buttonEl.addEventListener("mousedown", startDrag);
+        this.buttonEl.addEventListener("touchstart", startDrag, { passive: false });
+    }
+
+    clampButtonPosition(x, y) {
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        const rect = this.buttonEl.getBoundingClientRect();
+        const size = 50 + 16;
+
+        return {
+            x: Math.max(8, Math.min(w - size, x)),
+            y: Math.max(8, Math.min(h - size, y))
         };
     }
 
@@ -351,17 +346,147 @@ class Major {
         window.addEventListener("resize", () => this.updateDrawerSide());
     }
 
-    startOfficerReadyListener() {
-        const map = { "GENERAL_READY":"general", "LIEUTENANT_READY":"lieutenant", "SERGEANT_READY":"sergeant", "COLONEL_READY":"colonel" };
-        Object.entries(map).forEach(([sig, name]) => 
-            this.general.signals.listen(sig, () => {
-                this.officerStatus[name] = "ONLINE";
-                this.shadow.querySelector("#officer-status").textContent = "All Officers Online";
-            })
-        );
+    applyAnimationPreferences() { }
+
+    /* ============================================================
+       MUTATIONOBSERVER
+       ============================================================ */
+    startInlineScanner() {
+        if (this.mutationObserver) return;
+
+        const processNode = (node) => {
+            if (!(node instanceof HTMLAnchorElement)) return;
+            if (!node.href.includes("profiles.php") || !node.href.includes("XID=")) return;
+            if (node.dataset.nexusEnhanced) return;
+
+            const id = this.extractInlineId(node.href);
+            if (!id) return;
+
+            const box = document.createElement("span");
+            box.className = "nexus-inline-buttons";
+            box.innerHTML = `
+                <span class="nib nib-attack" data-id="${id}">Sword</span>
+                <span class="nib nib-analyze" data-id="${id}">Magnifying Glass</span>
+                <span class="nib nib-add" data-id="${id}">Plus</span>
+                <span class="nib nib-share" data-id="${id}">Share</span>
+            `;
+
+            node.insertAdjacentElement("afterend", box);
+            node.dataset.nexusEnhanced = "1";
+            this.attachInlineEvents(box);
+        };
+
+        const observer = new MutationObserver((mutations) => {
+            for (const mut of mutations) {
+                for (const node of mut.addedNodes) {
+                    if (node.nodeType === Node.ELEMENT_NODE) {
+                        if (node.matches("a[href*='profiles.php?XID=']")) {
+                            processNode(node);
+                        }
+                        // Also check children
+                        node.querySelectorAll?.("a[href*='profiles.php?XID=']").forEach(processNode);
+                    }
+                }
+            }
+        });
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+
+        this.mutationObserver = observer;
+
+        // Initial scan
+        document.querySelectorAll("a[href*='profiles.php?XID=']").forEach(processNode);
     }
+
+    extractInlineId(url) {
+        const m = url.match(/XID=(\d+)/);
+        return m ? m[1] : null;
+    }
+
+    attachInlineEvents(node) {  }
+
+    /* ============================================================
+       HEATMAP 
+       ============================================================ */
+    drawHeatmap(canvas, arr) {
+        if (!canvas || !Array.isArray(arr) || arr.length === 0) return;
+
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+
+        const w = canvas.width;
+        const h = canvas.height;
+        const bw = w / arr.length;
+
+        ctx.clearRect(0, 0, w, h);
+
+        const valid = arr.filter(n => typeof n === "number" && !isNaN(n));
+        const max = valid.length > 0 ? Math.max(...valid) : 1;
+
+        arr.forEach((v, i) => {
+            const val = typeof v === "number" ? v : 0;
+            const pct = max > 0 ? val / max : 0;
+            const alpha = Math.min(Math.max(pct, 0.05), 1);
+            ctx.fillStyle = `rgba(0, 200, 255, ${alpha})`;
+            ctx.fillRect(i * bw, 0, bw - 1, h);
+        });
+    }
+    startSitrepRouter() { }
+    routeSitrep(s) { }
+    renderStatusBadge(st) { }
+    renderThreatBadge(level) { }
+    renderLevelBadge(lv) { }
+    renderFactionRankChip(rank) { }
+    renderOnlineIndicator(type) { }
+
+    updateUserUI(user) { }
+    renderFactionTable(list) { }
+    renderEnemyTable(list) { }
+    renderTargetTables(targets) { }
+    renderTargetSubpanel(targets) { }
+    updateChainUI(chain) { }
+    renderChainLog(log) { }
+
+    attachAttackButtons(container) { }
+    attachAnalyzeButtons(container) { }
+    attachAddTargetButtons(container) { }
+
+    buildColonelPanel() { }
+    addColonelMessage(side, msg) { }
+    updateColonelAnswer(data) { }
+    updateAnalyzeResult(data) { }
+
+    buildSettingsPanel() { }
+    loadSettings() { }
+    saveSettings(cfg) { }
+    attachSettingsLogic() { }
+    setDrawerSide(side) { }
+
+    updateHeatmaps(data) { }
+    updateTargetScores(data) { }
+    routeGlobalSitrep(data) { }
+    routeFactionSitrep(data) { }
+
+    applyExtendedStyles() { }
+
+    finalizeUI() {
+        this.buildColonelPanel();
+        this.buildSettingsPanel();
+        this.attachSettingsLogic();
+        this.applyExtendedStyles();
+    }
+} 
+
+/* ============================================================
+   REGISTER WITH GENERAL
+   ============================================================ */
+if (window.WAR_GENERAL && typeof window.WAR_GENERAL.register === "function") {
+    window.WAR_GENERAL.register("Major", Major);
 }
 
-WAR_GENERAL.register("Major", Major);
+} 
 
 })();
