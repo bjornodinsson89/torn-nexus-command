@@ -1,5 +1,6 @@
 (function() {
-    WARDBG("[OFFICER START] sergeant.js");
+    WARDBG("[OFFICER START] Sergeant.js");
+
     const config = {
         apiKey: "AIzaSyAXIP665pJj4g9L9i-G-XVBrcJ0eU5V4uw",
         authDomain: "torn-war-room.firebaseapp.com",
@@ -58,7 +59,7 @@
             this.db = firebase.database();
             this.auth = firebase.auth();
 
-            await this.auth.signInAnonymously().catch(() => {});
+            try { await this.auth.signInAnonymously(); } catch {}
         },
 
         hook() {
@@ -118,7 +119,10 @@
             });
         }
     };
-    WARDBG("[OFFICER END] sergeant.js");
 
-    if (window.WAR_GENERAL) WAR_GENERAL.register("Sergeant", Sergeant);
+    WARDBG("[OFFICER END] Sergeant.js");
+
+    if (unsafeWindow.WAR_GENERAL)
+        unsafeWindow.WAR_GENERAL.register("Sergeant", Sergeant);
+
 })();
