@@ -66,6 +66,12 @@ class Major {
         this.intervals = [];
         this.boundHandlers = new Map();
     }
+        finalizeUI() {
+    if (typeof this.buildColonelPanel === "function") this.buildColonelPanel();
+    if (typeof this.buildSettingsPanel === "function") this.buildSettingsPanel();
+    if (typeof this.attachSettingsLogic === "function") this.attachSettingsLogic();
+    if (typeof this.applyExtendedStyles === "function") this.applyExtendedStyles();
+}
 
     /* ============================================================
        SANITIZATION HELPER (XSS DEFENSE)
@@ -96,8 +102,12 @@ class Major {
         this.applyAnimationPreferences();
 
         this.startInlineScanner();
+       
         this.startSitrepRouter();
+
+        if (typeof this.startOfficerReadyListener === "function") {
         this.startOfficerReadyListener();
+        }
 
         this.finalizeUI();
 
@@ -229,9 +239,43 @@ class Major {
     /* ============================================================
        TABS & PANELS 
        ============================================================ */
-    buildTabs() { }
-    buildPanels() { }
-    renderActivePanel() { }
+    buildTabs() {
+    this.tabsContainer.innerHTML = `
+        <button class="nexus-tab" data-tab="main">Main</button>
+        <button class="nexus-tab" data-tab="chain">Chain</button>
+        <button class="nexus-tab" data-tab="faction">Faction</button>
+        <button class="nexus-tab" data-tab="enemy">Enemies</button>
+        <button class="nexus-tab" data-tab="targets">Targets</button>
+        <button class="nexus-tab" data-tab="colonel">Ask Colonel</button>
+        <button class="nexus-tab" data-tab="settings">Settings</button>
+    `;
+
+    this.tabsContainer.querySelectorAll(".nexus-tab").forEach(btn => {
+        btn.addEventListener("click", () => {
+            this.activeTab = btn.dataset.tab;
+            this.renderActivePanel();
+        });
+    });
+}
+    buildPanels() {
+    this.panelsContainer.innerHTML = `
+        <div id="panel-main">Main Panel</div>
+        <div id="panel-chain">Chain Panel</div>
+        <div id="panel-faction">Faction Panel</div>
+        <div id="panel-enemy">Enemy Panel</div>
+        <div id="panel-targets">Targets Panel</div>
+        <div id="panel-colonel">Colonel Panel</div>
+        <div id="panel-settings">Settings Panel</div>
+    `;
+    this.renderActivePanel();
+}
+    renderActivePanel() {
+  if (!this.panelsContainer) return;
+
+  this.panelsContainer.querySelectorAll("div[id^='panel-']").forEach(panel => {
+    panel.style.display = (panel.id === `panel-${this.activeTab}`) ? "block" : "none";
+  });
+}
 
     /* ============================================================
        BUTTON & DRAWER LOGIC
@@ -250,13 +294,16 @@ class Major {
     }
 
     applyDrawerClasses() {
-        const side = this.drawerSide === "right" ? "right" : "left";
-        this.drawerEl.className = this.drawerOpen 
-            ? `drawer-open-${side === "right" ? "open-right" : "open-left"}`
-            : `drawer-closed-${side === "right" ? "right" : "left"}`;
-        if (side === "right") this.drawerEl.classList.add("right");
-        else this.drawerEl.classList.remove("right");
-    }
+  const side = this.drawerSide === "right" ? "right" : "left";
+
+  if (side === "right") {
+    this.drawerEl.className = this.drawerOpen ? "drawer-open-right" : "drawer-closed-right";
+    this.drawerEl.classList.add("right");
+  } else {
+    this.drawerEl.className = this.drawerOpen ? "drawer-open-left" : "drawer-closed-left";
+    this.drawerEl.classList.remove("right");
+  }
+}
 
     updateDrawerSide() {
         this.applyDrawerClasses();
@@ -402,78 +449,465 @@ class Major {
         return m ? m[1] : null;
     }
 
-    attachInlineEvents(node) {  }
+    attachInlineEvents(node) {
+  if (!node) return;
+
+  const attack = node.querySelector(".nib-attack");
+  const analyze = node.querySelector(".nib-analyze");
+  const add = node.querySelector(".nib-add");
+
+  attack?.addEventListener("click", e => {
+    e.stopPropagation();
+    const id = e.currentTarget.dataset.id;
+    if (!id) return;
+    window.location.href = `/loader.php?sid=attack&user2ID=${id}`;
+  });
+
+  analyze?.addEventListener("click", e => {
+    e.stopPropagation();
+    const id = e.currentTarget.dataset.id;
+    if (!id || !this.general?.signals) return;
+    this.general.signals.dispatch("REQUEST_PLAYER_SITREP", { id });
+  });
+
+  add?.addEventListener("click", e => {
+    e.stopPropagation();
+    const id = e.currentTarget.dataset.id;
+    if (!id || !this.general?.signals) return;
+    this.general.signals.dispatch("ADD_TARGET", { id });
+  });
+}
 
     /* ============================================================
-       HEATMAP 
-       ============================================================ */
-    drawHeatmap(canvas, arr) {
-        if (!canvas || !Array.isArray(arr) || arr.length === 0) return;
+   HEATMAP
+   ============================================================ */
+drawHeatmap(canvas, arr) {
+  if (!canvas || !Array.isArray(arr) || arr.length === 0) return;
 
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
 
-        const w = canvas.width;
-        const h = canvas.height;
-        const bw = w / arr.length;
+  const w = canvas.width;
+  const h = canvas.height;
+  const bw = w / arr.length;
 
-        ctx.clearRect(0, 0, w, h);
+  ctx.clearRect(0, 0, w, h);
 
-        const valid = arr.filter(n => typeof n === "number" && !isNaN(n));
-        const max = valid.length > 0 ? Math.max(...valid) : 1;
+  const valid = arr.filter(n => typeof n === "number" && !isNaN(n));
+  const max = valid.length > 0 ? Math.max(...valid) : 1;
 
-        arr.forEach((v, i) => {
-            const val = typeof v === "number" ? v : 0;
-            const pct = max > 0 ? val / max : 0;
-            const alpha = Math.min(Math.max(pct, 0.05), 1);
-            ctx.fillStyle = `rgba(0, 200, 255, ${alpha})`;
-            ctx.fillRect(i * bw, 0, bw - 1, h);
-        });
-    }
-    startSitrepRouter() { }
-    routeSitrep(s) { }
-    renderStatusBadge(st) { }
-    renderThreatBadge(level) { }
-    renderLevelBadge(lv) { }
-    renderFactionRankChip(rank) { }
-    renderOnlineIndicator(type) { }
+  arr.forEach((v, i) => {
+    const val = typeof v === "number" ? v : 0;
+    const pct = max > 0 ? val / max : 0;
+    const alpha = Math.min(Math.max(pct, 0.05), 1);
+    ctx.fillStyle = `rgba(0, 200, 255, ${alpha})`;
+    ctx.fillRect(i * bw, 0, bw - 1, h);
+  });
+}
 
-    updateUserUI(user) { }
-    renderFactionTable(list) { }
-    renderEnemyTable(list) { }
-    renderTargetTables(targets) { }
-    renderTargetSubpanel(targets) { }
-    updateChainUI(chain) { }
-    renderChainLog(log) { }
+/* ============================================================
+   SITREP ROUTING
+   ============================================================ */
+startSitrepRouter() {
+  if (!this.general?.signals) return;
 
-    attachAttackButtons(container) { }
-    attachAnalyzeButtons(container) { }
-    attachAddTargetButtons(container) { }
+  this.general.signals.listen("SITREP_UPDATE", d => this.routeSitrep(d));
+  this.general.signals.listen("TARGETS_SCORED", d => this.updateTargetScores(d));
+  this.general.signals.listen("PLAYER_SITREP_READY", d => this.updateAnalyzeResult(d));
+  this.general.signals.listen("GLOBAL_SITREP_READY", d => this.routeGlobalSitrep(d));
+  this.general.signals.listen("FACTION_SITREP_READY", d => this.routeFactionSitrep(d));
+  this.general.signals.listen("ASK_COLONEL_RESPONSE", d => this.updateColonelAnswer(d));
+}
 
-    buildColonelPanel() { }
-    addColonelMessage(side, msg) { }
-    updateColonelAnswer(data) { }
-    updateAnalyzeResult(data) { }
+routeSitrep(s) {
+  if (!s) return;
 
-    buildSettingsPanel() { }
-    loadSettings() { }
-    saveSettings(cfg) { }
-    attachSettingsLogic() { }
-    setDrawerSide(side) { }
+  if (s.user) this.updateUserUI(s.user);
+  if (s.factionMembers) this.renderFactionTable(s.factionMembers);
+  if (s.enemyFactionMembers) this.renderEnemyTable(s.enemyFactionMembers);
+  if (s.targets) this.renderTargetTables(s.targets);
+  if (s.chain) this.updateChainUI(s.chain);
+  if (s.chainLog) this.renderChainLog(s.chainLog);
+}
 
-    updateHeatmaps(data) { }
-    updateTargetScores(data) { }
-    routeGlobalSitrep(data) { }
-    routeFactionSitrep(data) { }
+/* ============================================================
+   BADGES
+   ============================================================ */
+renderStatusBadge(st) {
+  const s = (st || "").toLowerCase();
+  if (s.includes("hospital")) return `<span class="badge badge-hos">HOSP</span>`;
+  if (s.includes("jail")) return `<span class="badge badge-jail">JAIL</span>`;
+  if (s.includes("travel")) return `<span class="badge badge-travel">TRAVEL</span>`;
+  if (s.includes("online") || s.includes("okay")) return `<span class="badge badge-ok">OK</span>`;
+  return `<span class="badge badge-off">OFF</span>`;
+}
 
-    applyExtendedStyles() { }
+renderThreatBadge(level) {
+  if (level >= 80) return `<span class="badge badge-xtr">EXTREME</span>`;
+  if (level >= 50) return `<span class="badge badge-hi">HIGH</span>`;
+  if (level >= 25) return `<span class="badge badge-med">MED</span>`;
+  return `<span class="badge badge-lo">LOW</span>`;
+}
 
-    finalizeUI() {
-        this.buildColonelPanel();
-        this.buildSettingsPanel();
-        this.attachSettingsLogic();
-        this.applyExtendedStyles();
-    }
+renderLevelBadge(lv) {
+  return `<span class="badge badge-lv">Lv ${this.sanitize(lv)}</span>`;
+}
+
+renderFactionRankChip(rank) {
+  return `<span class="badge badge-rank">${this.sanitize(rank || "--")}</span>`;
+}
+
+renderOnlineIndicator(type) {
+  if (type === "online") return `<span class="dot dot-on"></span>`;
+  if (type === "recent") return `<span class="dot dot-recent"></span>`;
+  if (type === "danger") return `<span class="dot dot-danger"></span>`;
+  return `<span class="dot dot-off"></span>`;
+}
+
+/* ============================================================
+   DASHBOARD
+   ============================================================ */
+updateUserUI(user) {
+  const p = this.shadow.querySelector("#panel-main");
+  if (!p) return;
+
+  p.innerHTML = `
+    <div class="tile-grid">
+      <div class="tile">
+        <h3>Your Status</h3>
+        <p><b>Name:</b> ${this.sanitize(user.name)}</p>
+        <p><b>Level:</b> ${this.renderLevelBadge(user.level)}</p>
+        <p><b>Status:</b> ${this.renderStatusBadge(user.status)}</p>
+      </div>
+      <div class="tile">
+        <h3>Threat</h3>
+        <p>${this.renderThreatBadge(user.threat)}</p>
+      </div>
+      <div class="tile">
+        <h3>Heatmap</h3>
+        <canvas id="heatmap-main" width="320" height="90"></canvas>
+      </div>
+    </div>
+  `;
+}
+
+/* ============================================================
+   FACTION TABLE
+   ============================================================ */
+renderFactionTable(list = []) {
+  const p = this.shadow.querySelector("#panel-faction");
+  if (!p) return;
+
+  const rows = list.map(m => `
+    <tr>
+      <td>${this.renderOnlineIndicator(m.onlineState)}</td>
+      <td>${this.sanitize(m.name)}</td>
+      <td>${this.renderLevelBadge(m.level)}</td>
+      <td>${this.renderStatusBadge(m.status)}</td>
+      <td>${this.renderFactionRankChip(m.rank)}</td>
+    </tr>
+  `).join("");
+
+  p.innerHTML = `
+    <div class="tile">
+      <h3>Faction Members</h3>
+      <table class="nexus-table">
+        <thead>
+          <tr><th>On</th><th>Name</th><th>Lv</th><th>Status</th><th>Rank</th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+/* ============================================================
+   ENEMY TABLE
+   ============================================================ */
+renderEnemyTable(list = []) {
+  const p = this.shadow.querySelector("#panel-enemy");
+  if (!p) return;
+
+  const rows = list.map(m => `
+    <tr>
+      <td>${this.renderOnlineIndicator(m.onlineState)}</td>
+      <td>${this.sanitize(m.name)}</td>
+      <td>${this.renderLevelBadge(m.level)}</td>
+      <td>${this.renderStatusBadge(m.status)}</td>
+      <td><span class="nib-att" data-id="${m.id}">⚔</span></td>
+    </tr>
+  `).join("");
+
+  p.innerHTML = `
+    <div class="tile">
+      <h3>Enemy Faction Members</h3>
+      <table class="nexus-table">
+        <thead>
+          <tr><th>On</th><th>Name</th><th>Lv</th><th>Status</th><th>A</th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+
+  this.attachAttackButtons(p);
+}
+
+/* ============================================================
+   TARGETS TABLE
+   ============================================================ */
+renderTargetTables(targets = { personal:[], war:[], shared:[] }) {
+  const p = this.shadow.querySelector("#panel-targets");
+  if (!p) return;
+
+  p.innerHTML = `
+    <div class="target-subtabs">
+      <button class="target-tab" data-sub="personal">Personal</button>
+      <button class="target-tab" data-sub="war">War</button>
+      <button class="target-tab" data-sub="shared">Shared</button>
+    </div>
+    <div id="target-content"></div>
+  `;
+
+  p.querySelectorAll(".target-tab").forEach(btn => {
+    btn.addEventListener("click", () => {
+      this.targetSubTab = btn.dataset.sub;
+      this.renderTargetSubpanel(targets);
+    });
+  });
+
+  this.renderTargetSubpanel(targets);
+}
+
+renderTargetSubpanel(targets) {
+  const dest = this.shadow.querySelector("#target-content");
+  if (!dest) return;
+
+  const list =
+    this.targetSubTab === "personal" ? targets.personal :
+    this.targetSubTab === "war"      ? targets.war :
+                                       targets.shared;
+
+  const rows = list.map(t => `
+    <tr>
+      <td>${this.renderOnlineIndicator(t.onlineState)}</td>
+      <td>${this.sanitize(t.name)}</td>
+      <td>${this.renderLevelBadge(t.level)}</td>
+      <td>${this.renderStatusBadge(t.status)}</td>
+      <td>${(t.colonelScore || 0).toFixed(2)}</td>
+      <td><span class="nib-att" data-id="${t.id}">⚔</span></td>
+      <td><span class="nib-ana" data-id="${t.id}">🔍</span></td>
+      <td><span class="nib-add" data-id="${t.id}">➕</span></td>
+    </tr>
+  `).join("");
+
+  dest.innerHTML = `
+    <table class="nexus-table">
+      <thead>
+        <tr><th>On</th><th>Name</th><th>Lv</th><th>Status</th><th>Score</th><th>A</th><th>Z</th><th>+</th></tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+
+  this.attachAttackButtons(dest);
+  this.attachAnalyzeButtons(dest);
+  this.attachAddTargetButtons(dest);
+}
+
+/* ============================================================
+   CHAIN UI
+   ============================================================ */
+updateChainUI(chain = {}) {
+  const p = this.shadow.querySelector("#panel-chain");
+  if (!p) return;
+
+  p.innerHTML = `
+    <div class="tile-grid">
+      <div class="tile">
+        <h3>Chain Status</h3>
+        <p><b>Hits:</b> ${chain.hits}</p>
+        <p><b>Timeout:</b> ${chain.timeLeft}</p>
+        <p><b>Pace:</b> ${chain.currentPace}/min</p>
+      </div>
+      <div class="tile">
+        <h3>Warnings</h3>
+        <p>${this.sanitize(chain.warning || "")}</p>
+      </div>
+    </div>
+  `;
+}
+
+renderChainLog(log = []) {
+  const p = this.shadow.querySelector("#panel-chain");
+  if (!p) return;
+
+  const entries = log.map(rec => `
+    <div class="chain-log-entry">
+      <b>${this.sanitize(rec.player)}</b> → +${this.sanitize(rec.respect)}
+      <span class="time">${new Date(rec.time).toLocaleTimeString()}</span>
+    </div>
+  `).join("");
+
+  const box = document.createElement("div");
+  box.className = "tile";
+  box.innerHTML = `<h3>Chain Log</h3><div class="chain-log">${entries}</div>`;
+  p.appendChild(box);
+}
+
+/* ============================================================
+   TABLE BUTTONS
+   ============================================================ */
+attachAttackButtons(container) {
+  container.querySelectorAll(".nib-att").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.id;
+      if (!id) return;
+      window.location.href = `/loader.php?sid=attack&user2ID=${id}`;
+    });
+  });
+}
+
+attachAnalyzeButtons(container) {
+  container.querySelectorAll(".nib-ana").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.id;
+      if (!id) return;
+      this.general?.signals?.dispatch("REQUEST_PLAYER_SITREP", { id });
+    });
+  });
+}
+
+attachAddTargetButtons(container) {
+  container.querySelectorAll(".nib-add").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.id;
+      if (!id) return;
+      this.general?.signals?.dispatch("ADD_TARGET", { id });
+    });
+  });
+}
+
+/* ============================================================
+   COLONEL PANEL
+   ============================================================ */
+buildColonelPanel() {
+  const panel = this.shadow.querySelector("#panel-colonel");
+  if (!panel) return;
+
+  panel.innerHTML = `
+    <div class="tile">
+      <h3>Ask the Colonel</h3>
+      <div class="col-msgs" style="height:200px;overflow-y:auto;border:1px solid #003f4f;padding:6px;margin-bottom:6px;"></div>
+      <input id="col-input" type="text" placeholder="Ask something..." style="width:100%;box-sizing:border-box;margin-bottom:6px;">
+      <button id="col-send">Send</button>
+    </div>
+  `;
+
+  const input = panel.querySelector("#col-input");
+  const send = panel.querySelector("#col-send");
+
+  const sendMsg = () => {
+    const q = input.value.trim();
+    if (!q) return;
+    input.value = "";
+    this.addColonelMessage("user", q);
+    this.general?.signals?.dispatch("ASK_COLONEL", { question: q });
+  };
+
+  send.addEventListener("click", sendMsg);
+  input.addEventListener("keydown", e => e.key === "Enter" && sendMsg());
+}
+
+addColonelMessage(side, msg) {
+  const panel = this.shadow.querySelector("#panel-colonel .col-msgs");
+  if (!panel) return;
+
+  const div = document.createElement("div");
+  div.className = side === "user" ? "col-user" : "col-reply";
+  div.style.marginBottom = "4px";
+  div.textContent = msg;
+
+  panel.appendChild(div);
+  panel.scrollTop = panel.scrollHeight;
+}
+
+updateColonelAnswer(data) {
+  if (data?.answer) this.addColonelMessage("colonel", data.answer);
+}
+
+updateAnalyzeResult(data) {
+  if (data?.summary) this.addColonelMessage("colonel", data.summary);
+}
+
+/* ============================================================
+   SETTINGS
+   ============================================================ */
+buildSettingsPanel() {
+  const panel = this.shadow.querySelector("#panel-settings");
+  if (!panel) return;
+
+  panel.innerHTML = `
+    <div class="tile">
+      <h3>Drawer Options</h3>
+      <label>Side:
+        <select id="drawer-side">
+          <option value="left">Left</option>
+          <option value="right">Right</option>
+        </select>
+      </label>
+    </div>
+  `;
+}
+
+attachSettingsLogic() {
+  const sideSelect = this.shadow.querySelector("#drawer-side");
+  if (!sideSelect) return;
+
+  sideSelect.value = this.drawerSide;
+
+  sideSelect.addEventListener("change", () => {
+    this.drawerSide = sideSelect.value;
+    this.updateDrawerSide();
+  });
+}
+
+/* ============================================================
+   HEATMAP UPDATES
+   ============================================================ */
+updateHeatmaps(data = {}) {
+  const main = this.shadow.querySelector("#heatmap-main");
+  if (main && Array.isArray(data.onlineHeatmap)) {
+    this.drawHeatmap(main, data.onlineHeatmap);
+  }
+}
+
+updateTargetScores(data = {}) {
+  if (!data.scored) return;
+  const targets = {
+    personal: data.scored.filter(t => t.type === "personal"),
+    war:      data.scored.filter(t => t.type === "war"),
+    shared:   data.scored.filter(t => t.type === "shared")
+  };
+  this.renderTargetTables(targets);
+}
+
+routeGlobalSitrep(data) {
+  if (data) {
+    this.updateHeatmaps({
+      onlineHeatmap: data.heatmap,
+      statusHeatmap: data.statusHeatmap,
+      attackHeatmap: data.attackHeatmap,
+      anomalyHeatmap: data.anomalyHeatmap
+    });
+  }
+}
+
+routeFactionSitrep(data) {
+  if (data?.members) this.renderFactionTable(data.members);
+}
+
+} // END CLASS Major
 
 /* ============================================================
    REGISTER WITH GENERAL
@@ -482,6 +916,6 @@ if (window.WAR_GENERAL && typeof window.WAR_GENERAL.register === "function") {
     window.WAR_GENERAL.register("Major", Major);
 }
 
-} 
+} // END startMajor
 
 })();
