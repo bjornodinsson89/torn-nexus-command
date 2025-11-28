@@ -1,5 +1,3 @@
-// === WAR_SERGEANT vΣ — NEXUS EXTERNAL COMMS ===
-
 (function() {
     const config = {
         apiKey: "AIzaSyAXIP665pJj4g9L9i-G-XVBrcJ0eU5V4uw",
@@ -24,6 +22,7 @@
 
         init(G) {
             this.general = G;
+            WARDBG("Sergeant init()");
             this.loadLocal();
             this.initFirebase().then(() => {
                 this.ready = true;
@@ -48,10 +47,16 @@
                 "https://www.gstatic.com/firebasejs/10.13.1/firebase-database-compat.js",
                 "https://www.gstatic.com/firebasejs/10.13.1/firebase-auth-compat.js"
             ];
-            for (const u of libs) await this.general.loadPlugin(u);
+
+            for (const u of libs) {
+                WARDBG("Firebase library: " + u);
+                await this.general.loadPlugin(u);
+            }
+
             this.app = firebase.initializeApp(config);
             this.db = firebase.database();
             this.auth = firebase.auth();
+
             await this.auth.signInAnonymously().catch(() => {});
         },
 
@@ -69,6 +74,7 @@
         syncMembers(members) {
             if (!this.ready || !this.factionId) return;
             const base = `/factions/${this.factionId}/members`;
+
             for (const [id, m] of Object.entries(members)) {
                 this.enqueue(`${base}/${id}`, {
                     id,
@@ -82,8 +88,10 @@
         addShared(t) {
             if (!t?.id || !t?.name) return;
             t.timestamp = Date.now();
+
             this.shared = this.shared.filter(x => x.id !== t.id);
             this.shared.push(t);
+
             this.saveLocal();
 
             this.general.signals.dispatch("SHARED_TARGETS_UPDATED", this.shared);
@@ -100,13 +108,15 @@
 
         flush() {
             if (!this.ready) return;
+
             const q = [...this.writeQueue];
             this.writeQueue.length = 0;
+
             q.forEach(item => {
                 this.db.ref(item.path).set(item.value);
             });
         }
     };
 
-    if (window.WAR_GENERAL) window.WAR_GENERAL.register("Sergeant", Sergeant);
+    if (window.WAR_GENERAL) WAR_GENERAL.register("Sergeant", Sergeant);
 })();
