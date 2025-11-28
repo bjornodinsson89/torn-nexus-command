@@ -1,9 +1,14 @@
-// === WAR_COLONEL vΩ — NEXUS STRATEGIC AI ===
-
 (function() {
     const Colonel = {
         general: null,
         lastUpdate: 0,
+        state: {
+            user: {},
+            chain: {},
+            faction: {},
+            enemiesRaw: {},
+            targets: { personal: [], war: [], shared: [] }
+        },
         ai: {
             threat: 0,
             risk: 0,
@@ -13,71 +18,54 @@
             topTargets: [],
             notes: []
         },
-        state: {
-            user: {},
-            chain: {},
-            faction: {},
-            enemyMembers: {},
-            targets: { personal: [], war: [], shared: [] }
-        },
 
         init(G) {
             this.general = G;
-            this.listen("RAW_INTEL", d => this.ingest(d));
-        },
-
-        listen(ev, fn) {
-            this.general.signals.listen(ev, fn);
+            this.general.signals.listen("RAW_INTEL", d => this.ingest(d));
         },
 
         ingest(d) {
             this.state.user = d.user || {};
             this.state.chain = d.chain || {};
             this.state.faction = d.faction || {};
-            this.state.enemyMembers = d.war?.enemyMembers || {};
-            this.computeAI();
-            this.dispatchSitrep();
+            this.state.enemiesRaw = d.war?.enemyMembers || {};
+            this.updateAI();
+            this.dispatchSITREP();
         },
 
-        computeAI() {
-            const u = this.state.user;
-            const c = this.state.chain;
-            const e = Object.values(this.state.enemyMembers);
+        updateAI() {
+            const user = this.state.user;
+            const chain = this.state.chain;
+            const members = Object.values(this.state.enemiesRaw);
             const now = Date.now();
 
-            let threat = 0;
-            let risk = 0;
-            let aggression = 0;
-            let instability = 0;
+            const online = members.filter(m => (now - (m.last_action?.timestamp || 0)) < 600000).length;
+            const hosp = members.filter(m => (m.status || "").toLowerCase().includes("hospital")).length;
 
-            const online = e.filter(m => (now - (m.last_seen || 0)) < 600000).length;
-            const hosp = e.filter(m => (m.status || "").toLowerCase().includes("hospital")).length;
+            let t = 0, r = 0, g = 0, s = 0;
 
-            threat += Math.min(0.7, online * 0.04);
-            threat += hosp < e.length * 0.5 ? 0.1 : 0;
-            if (c.hits > 0) threat += 0.15;
+            t += Math.min(0.7, online * 0.04);
+            t += hosp < members.length * 0.5 ? 0.1 : 0;
+            if (chain.hits > 0) t += 0.15;
 
-            if (c.timeLeft < 20) risk += 0.7;
-            else if (c.timeLeft < 60) risk += 0.4;
+            if (chain.timeLeft < 20) r += 0.7;
+            else if (chain.timeLeft < 60) r += 0.4;
 
-            if ((u.status || "").toLowerCase().includes("hospital")) risk += 0.2;
+            if ((user.status || "").toLowerCase().includes("hospital")) r += 0.2;
 
-            aggression = (c.hits || 0) / Math.max(1, (now - this.lastUpdate) / 1000);
-            instability = Math.abs((c.timeLeft || 0) - 30) / 60;
+            g = (chain.hits || 0) / Math.max(1, (now - this.lastUpdate) / 1000);
+            s = Math.abs((chain.timeLeft || 0) - 30) / 60;
 
-            const predictionDrop = c.timeLeft < 120 ? (120 - c.timeLeft) / 2 : 0;
-            const predictionHit = online > 0 ? Math.round(online * threat * 3) : 0;
+            const drop = chain.timeLeft < 120 ? (120 - chain.timeLeft) / 2 : 0;
+            const nextHit = online > 0 ? Math.round(online * t * 3) : 0;
 
-            this.ai.threat = Math.min(1, threat);
-            this.ai.risk = Math.min(1, risk);
-            this.ai.aggression = Math.min(1, aggression);
-            this.ai.instability = Math.min(1, instability);
-            this.ai.prediction = {
-                drop: Math.max(0, predictionDrop),
-                nextHit: predictionHit
-            };
+            this.ai.threat = Math.min(1, t);
+            this.ai.risk = Math.min(1, r);
+            this.ai.aggression = Math.min(1, g);
+            this.ai.instability = Math.min(1, s);
+            this.ai.prediction = { drop: Math.max(0, drop), nextHit };
 
-            this.ai.topTargets = this.scoreTargets(e).slice(0, 8);
+            this.ai.topTargets = this.scoreTargets(members).slice(0, 10);
             this.ai.notes = this.buildNotes();
 
             this.lastUpdate = now;
@@ -85,13 +73,17 @@
 
         scoreTargets(list) {
             return list.map(m => {
-                let s = 0;
-                s += (m.level || 1) * 2;
-                if ((m.status || "").toLowerCase().includes("hospital")) s -= 25;
-                if ((m.status || "").toLowerCase().includes("jail")) s -= 30;
-                if ((m.status || "").toLowerCase().includes("travel")) s -= 15;
-                if ((m.last_seen || 0) > Date.now() - 300000) s += 15;
-                return { ...m, score: Math.max(0, s) };
+                let score = 0;
+                score += (m.level || 1) * 2;
+
+                const st = (m.status || "").toLowerCase();
+                if (st.includes("hospital")) score -= 25;
+                if (st.includes("jail")) score -= 30;
+                if (st.includes("travel")) score -= 15;
+
+                if ((m.last_action?.timestamp || 0) > Date.now() - 300000) score += 15;
+
+                return { ...m, score: Math.max(0, score) };
             }).sort((a, b) => b.score - a.score);
         },
 
@@ -109,7 +101,7 @@
             return n;
         },
 
-        dispatchSitrep() {
+        dispatchSITREP() {
             this.general.signals.dispatch("SITREP_UPDATE", {
                 user: this.state.user,
                 chain: this.state.chain,
@@ -127,8 +119,7 @@
                 name: x.name,
                 level: x.level,
                 status: x.status?.state || "",
-                onlineState: ((Date.now() - (x.last_action?.timestamp || 0)) < 600000) ? "online" : "offline",
-                days: x.days_in_faction
+                onlineState: ((Date.now() - (x.last_action?.timestamp || 0)) < 600000) ? "online" : "offline"
             }));
         },
 
@@ -138,7 +129,7 @@
                 name: x.name,
                 level: x.level,
                 status: x.status,
-                onlineState: ((Date.now() - (x.last_seen || 0)) < 600000) ? "online" : "offline"
+                onlineState: ((Date.now() - (x.last_action?.timestamp || 0)) < 600000) ? "online" : "offline"
             }));
         }
     };
