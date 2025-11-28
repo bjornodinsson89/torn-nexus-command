@@ -1,56 +1,46 @@
-// === WAR_LIEUTENANT vX — NEXUS EDITION ===
-
 (function() {
     const Lieutenant = {
         general: null,
         interval: null,
-        memory: {
-            chainActive: false,
-            chainHits: 0,
-            chainTimeout: 0
-        },
+        tick: 0,
+        chainActive: false,
+        chainTimeout: 0,
 
         init(G) {
             this.general = G;
-            this.start();
-        },
-
-        start() {
             this.interval = setInterval(() => {
                 if (!this.general.intel.hasCredentials()) return;
-                this.poll();
+                this.tick++;
+                const rate = this.getRate();
+                if (this.tick >= rate) {
+                    this.tick = 0;
+                    this.requestIntel();
+                }
             }, 1000);
         },
 
-        poll() {
-            const rate = this.getRate();
-            if (!this._tick) this._tick = 0;
-            this._tick++;
-            if (this._tick < rate) return;
-            this._tick = 0;
+        getRate() {
+            if (this.chainActive && this.chainTimeout < 45) return 1;
+            if (this.chainActive) return 3;
+            return 15;
+        },
 
-            this.general.intel.request("chain,faction,war,profile")
+        requestIntel() {
+            this.general.intel.request("basic,profile,chain,faction,territory,war")
                 .then(d => {
                     const intel = this.normalize(d);
                     this.general.signals.dispatch("RAW_INTEL", intel);
                 });
         },
 
-        getRate() {
-            if (this.memory.chainActive && this.memory.chainTimeout < 50) return 1;
-            if (this.memory.chainActive) return 3;
-            return 15;
-        },
-
         normalize(d) {
             const chain = d.chain || {};
-            const faction = d.faction || {};
             const profile = d.profile || {};
+            const faction = d.faction || {};
             const war = d.war || {};
 
-            this.memory.chainActive = chain.current > 0;
-            this.memory.chainHits = chain.current || 0;
-            this.memory.chainTimeout = chain.timeout || 0;
+            this.chainActive = chain.current > 0;
+            this.chainTimeout = chain.timeout || 0;
 
             return {
                 user: {
