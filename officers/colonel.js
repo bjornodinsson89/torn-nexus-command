@@ -127,8 +127,7 @@
 
         _buildAINotes(threat, risk, chain, war, user) {
             const notes = [];
-            // FIXED: Template literal syntax error corrected
-            if (chain?.current > 0) notes.push(`Chain ${chain.current} active; ${chain.timeout}s left.`);
+            if (chain?.current > 0) notes.push(`Chain \( {chain.current} active; \){chain.timeout}s left.`);
             if (war?.state) notes.push(`War: ${war.state || "UNKNOWN"}`);
             if (threat > 0.7) notes.push("High enemy activity — stay sharp.");
             if (risk > 0.7) notes.push("Chain drop imminent!");
@@ -183,8 +182,7 @@
                 if (!key) throw new Error("No API key");
                 const base = "https://api.torn.com/";
                 const sel = Array.isArray(selections) ? selections.join(",") : selections;
-                // FIXED: Template literal syntax error corrected
-                return `${base}${section || "user"}${id ? "/" + id : ""}?selections=${sel}&key=${key}`;
+                return `\( {base} \){section || "user"}\( {id ? "/" + id : ""}?selections= \){sel}&key=${key}`;
             }
 
             async function callTorn(section, selections, opts = {}) {
@@ -261,6 +259,7 @@
     };
 
     if (window.WAR_GENERAL) {
+        window.Colonel = Colonel; // Global exposure fix
         window.WAR_GENERAL.register("Colonel", Colonel);
     }
 })();
