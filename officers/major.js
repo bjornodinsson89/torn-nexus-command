@@ -170,9 +170,7 @@ class Major {
         this.buildTabs();
         this.buildPanels();
     }
-
-    }
-
+    
     applyBaseStyles() {
         const style = document.createElement("style");
         style.textContent = `
