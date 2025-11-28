@@ -85,8 +85,13 @@ function NEXUS_LIEUTENANT_MODULE() {
 
     WARDBG("[OFFICER END] Lieutenant.js");
 
-    if (unsafeWindow.WAR_GENERAL)
-        unsafeWindow.WAR_GENERAL.register("Lieutenant", Lieutenant);
+    // ✅ Use window.WAR_GENERAL from the page, not unsafeWindow
+    if (window.WAR_GENERAL) {
+        WARDBG("Lieutenant registering with WAR_GENERAL");
+        window.WAR_GENERAL.register("Lieutenant", Lieutenant);
+    } else {
+        WARDBG("ERROR: window.WAR_GENERAL not found during Lieutenant registration.");
+    }
 }
 
 NEXUS_LIEUTENANT_MODULE();
