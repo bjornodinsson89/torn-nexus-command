@@ -8,7 +8,7 @@
 // --- DEBUG CHECK ---
 // If you don't see this alert, you are editing the wrong file!
 console.log("Attempting to load V8.0...");
-// alert("V8.0 BLACK OPS CODE IS RUNNING"); // Uncomment this if you are really stuck
+/ alert("V8.0 BLACK OPS CODE IS RUNNING"); // Uncomment this if you are really stuck
 // -------------------
 
 /* ============================================================
