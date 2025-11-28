@@ -8,6 +8,7 @@
 
         init(G) {
             this.general = G;
+            WARDBG("Lieutenant init()");
             this.interval = setInterval(() => {
                 if (!this.general.intel.hasCredentials()) return;
                 this.tick++;
@@ -72,5 +73,5 @@
         }
     };
 
-    if (window.WAR_GENERAL) window.WAR_GENERAL.register("Lieutenant", Lieutenant);
+    if (window.WAR_GENERAL) WAR_GENERAL.register("Lieutenant", Lieutenant);
 })();
