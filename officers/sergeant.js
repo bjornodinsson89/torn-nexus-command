@@ -17,7 +17,9 @@
 (function(){
 "use strict";
 
-/* BLOCK: STATE */
+/* ------------------------------------------------------------ */
+/* STATE */
+/* ------------------------------------------------------------ */
 
 const DB = "https://torn-war-room-default-rtdb.firebaseio.com";
 
@@ -30,13 +32,14 @@ const Sergeant = {
     writeTimer: null,
     pollTimer: null,
 
-    /* PATCH: throttle mechanism */
     lastWriteTs: 0,
-    minWriteDelay: 1200,     // minimal spacing
-    maxWriteDelay: 5000      // hard cutoff to guarantee flush
+    minWriteDelay: 1200,
+    maxWriteDelay: 5000
 };
 
-/* BLOCK: INIT */
+/* ------------------------------------------------------------ */
+/* INIT */
+/* ------------------------------------------------------------ */
 
 Sergeant.init = function(nexus){
     this.nexus = nexus;
@@ -44,11 +47,11 @@ Sergeant.init = function(nexus){
     this.nexus.events.on("SITREP_UPDATE", data => {
         const fid = data?.faction?.id;
 
-        // PATCH: prevent duplicate polling timers
+        // Only restart polling when faction changes
         if (fid && fid !== this.factionId){
             this.factionId = fid;
 
-            if (this.pollTimer) {
+            if (this.pollTimer){
                 clearInterval(this.pollTimer);
                 this.pollTimer = null;
             }
@@ -69,7 +72,9 @@ Sergeant.init = function(nexus){
     this.loadLocalTargets();
 };
 
-/* BLOCK: POLLING */
+/* ------------------------------------------------------------ */
+/* POLLING LOOP */
+/* ------------------------------------------------------------ */
 
 Sergeant.startPolling = function(){
     if (this.pollTimer) clearInterval(this.pollTimer);
@@ -82,7 +87,9 @@ Sergeant.startPolling = function(){
     }, 5000);
 };
 
-/* BLOCK: REST GET */
+/* ------------------------------------------------------------ */
+/* REST GET */
+/* ------------------------------------------------------------ */
 
 Sergeant.restGet = function(path, cb){
     if (typeof GM_xmlhttpRequest !== "function"){
@@ -102,7 +109,9 @@ Sergeant.restGet = function(path, cb){
     });
 };
 
-/* BLOCK: REST PUT */
+/* ------------------------------------------------------------ */
+/* REST PUT */
+/* ------------------------------------------------------------ */
 
 Sergeant.restPut = function(path, value, cb){
     if (typeof GM_xmlhttpRequest !== "function"){
@@ -119,7 +128,9 @@ Sergeant.restPut = function(path, value, cb){
     });
 };
 
-/* BLOCK: REST PATCH */
+/* ------------------------------------------------------------ */
+/* REST PATCH */
+/* ------------------------------------------------------------ */
 
 Sergeant.restPatch = function(path, value, cb){
     if (typeof GM_xmlhttpRequest !== "function"){
@@ -136,7 +147,9 @@ Sergeant.restPatch = function(path, value, cb){
     });
 };
 
-/* BLOCK: AI MEMORY PULL */
+/* ------------------------------------------------------------ */
+/* PULL AI MEMORY */
+/* ------------------------------------------------------------ */
 
 Sergeant.pullAIMemory = function(){
     if (!this.factionId) return;
@@ -151,34 +164,28 @@ Sergeant.pullAIMemory = function(){
     });
 };
 
-/* BLOCK: AI MEMORY WRITE QUEUE */
-/* FIX: Debounce starvation → throttle + forced flush */
+/* ------------------------------------------------------------ */
+/* WRITE QUEUE (with guaranteed flush) */
+/* ------------------------------------------------------------ */
 
 Sergeant.enqueueWrite = function(path, payload){
-    // PATCH: ensure path safety
     if (!path || typeof path !== "string") {
         console.warn("Sergeant WARN: invalid write path:", path);
         return;
     }
 
     this.writeQueue.push({ path, payload });
+
     const now = Date.now();
-
-    // Clear previous timer
-    if (this.writeTimer) clearTimeout(this.writeTimer);
-
-    // If enough time has passed, flush soon
     const elapsed = now - this.lastWriteTs;
 
-    // If we haven't written for a while → flush sooner
-    const delay = (elapsed > this.maxWriteDelay)
-        ? 50
-        : this.minWriteDelay;
+    if (this.writeTimer) clearTimeout(this.writeTimer);
+
+    const delay = (elapsed > this.maxWriteDelay) ? 50 : this.minWriteDelay;
 
     this.writeTimer = setTimeout(() => this.flushWriteQueue(), delay);
 };
 
-/* Ensures queue eventually drains regardless of spam */
 Sergeant.flushWriteQueue = function(){
     const q = [...this.writeQueue];
     this.writeQueue.length = 0;
@@ -191,7 +198,9 @@ Sergeant.flushWriteQueue = function(){
     });
 };
 
-/* BLOCK: SHARED TARGETS LOCAL */
+/* ------------------------------------------------------------ */
+/* LOCAL TARGET STORAGE */
+/* ------------------------------------------------------------ */
 
 Sergeant.loadLocalTargets = function(){
     try {
@@ -208,19 +217,19 @@ Sergeant.saveLocalTargets = function(){
     localStorage.setItem("nexus_shared_targets", JSON.stringify(this.sharedTargets));
 };
 
-/* BLOCK: SHARED TARGETS ADD */
+/* ------------------------------------------------------------ */
+/* ADD SHARED TARGET */
+/* ------------------------------------------------------------ */
 
 Sergeant.addSharedTarget = function(t){
     if (!t?.id || !t?.name) return;
 
     t.timestamp = Date.now();
 
-    // no duplicates
     this.sharedTargets = this.sharedTargets.filter(x => x.id !== t.id);
     this.sharedTargets.push(t);
 
     this.saveLocalTargets();
-
     this.nexus.events.emit("SHARED_TARGETS_UPDATED", this.sharedTargets);
 
     if (this.factionId){
@@ -229,7 +238,9 @@ Sergeant.addSharedTarget = function(t){
     }
 };
 
-/* BLOCK: SHARED TARGETS PULL */
+/* ------------------------------------------------------------ */
+/* PULL SHARED TARGETS */
+/* ------------------------------------------------------------ */
 
 Sergeant.pullSharedTargets = function(){
     if (!this.factionId) return;
@@ -251,7 +262,9 @@ Sergeant.pullSharedTargets = function(){
     });
 };
 
-/* BLOCK: COMMANDER ORDERS */
+/* ------------------------------------------------------------ */
+/* COMMANDER ORDERS */
+/* ------------------------------------------------------------ */
 
 Sergeant.pullCommanderOrders = function(){
     if (!this.factionId) return;
@@ -264,10 +277,11 @@ Sergeant.pullCommanderOrders = function(){
     });
 };
 
-/* BLOCK: REGISTRATION */
+/* ------------------------------------------------------------ */
+/* REGISTER */
+/* ------------------------------------------------------------ */
 
 if (!window.__NEXUS_OFFICERS) window.__NEXUS_OFFICERS = [];
-
 window.__NEXUS_OFFICERS.push({
     name: "Sergeant",
     module: Sergeant
