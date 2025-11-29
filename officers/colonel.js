@@ -14,270 +14,157 @@
 //   - Integration with Sergeant shared intel
 ////////////////////////////////////////////////////////////
 
-(function() {
+(function(){
 "use strict";
 
 const Colonel = {
-
-    general: null,
-    lastUpdateTS: 0,
-
-    // Internal state model
+    nexus: null,
+    lastTs: 0,
     state: {
         user: {},
-        chain: {},
         faction: {},
-        enemies: []
+        factionMembers: [],
+        enemies: [],
+        chain: {},
+        attacks: [],
+        supplemental: {}
     },
-
-    // AI model state
     ai: {
         threat: 0,
         risk: 0,
         aggression: 0,
         instability: 0,
         prediction: { drop: 0, nextHit: 0 },
-        topTargets: [],
-        notes: []
+        notes: [],
+        topTargets: []
     },
-
-    init(G) {
-        this.general = G;
-
-        this.general.signals.listen("RAW_INTEL", d => this.ingest(d));
-        this.general.signals.listen("ASK_COLONEL", q => this.answerAI(q));
-
-        if (typeof WARDBG === "function") WARDBG("Colonel online (v7.6)");
+    init(nexus) {
+        this.nexus = nexus;
+        this.nexus.events.on("RAW_INTEL", d => this.ingest(d));
+        this.nexus.events.on("ASK_COLONEL", q => this.answer(q));
     },
-
-    // -------------------------------------------------------
-    //  INGEST RAW INTEL
-    // -------------------------------------------------------
-    ingest(d) {
-        const now = Date.now();
-
-        // Normalize RAW_INTEL into Colonel state
-        this.state.user = d.user || {};
-        this.state.chain = d.chain || {};
-        this.state.faction = d.faction || {};
-        this.state.enemies = this.normalizeEnemies(d.war.enemyMembers || {}, now);
-
-        // AI update
-        this.updateAI(now);
-
-        // Build SITREP and dispatch
+    ingest(data) {
+        this.state.user = data.user || {};
+        this.state.chain = data.chain || {};
+        this.state.attacks = data.attacks || [];
+        this.state.supplemental = data.supplemental || {};
+        this.state.faction = data.faction || {};
+        this.state.factionMembers = this.state.faction.members ? Object.values(this.state.faction.members) : [];
+        this.state.enemies = this.extractEnemies(data.enemies || []);
+        this.updateAI();
         this.dispatchSITREP();
-        this.lastUpdateTS = now;
     },
-
-    // -------------------------------------------------------
-    //  NORMALIZE ENEMY MEMBERS (object map → array)
-    // -------------------------------------------------------
-    normalizeEnemies(obj, now) {
-        return Object.values(obj || {}).map(m => ({
-            id: m.ID || m.id,
-            name: m.name,
-            level: m.level,
-            status: m.status?.state || "",
-            last_action: {
-                timestamp: m.last_action?.timestamp || 0,
-                relative: m.last_action?.relative || ""
-            },
-            online: (now - (m.last_action?.timestamp || 0)) < 600000
-        }));
+    extractEnemies(enemies) {
+        if (!enemies || enemies.length === 0) return [];
+        const first = enemies[0];
+        if (!first.members) return [];
+        return Object.values(first.members);
     },
-
-    // -------------------------------------------------------
-    //  AI MODEL: SCORING, THREAT, RISK, ETC.
-    // -------------------------------------------------------
-    updateAI(now) {
+    updateAI() {
+        const now = Date.now();
+        const c = this.state.chain;
         const user = this.state.user;
-        const chain = this.state.chain;
         const enemies = this.state.enemies;
-
-        //---------------------------------------------------
-        // THREAT (enemy activity + chain movement)
-        //---------------------------------------------------
-        const onlineEnemies = enemies.filter(e => e.online).length;
-
         let threat = 0;
-        threat += Math.min(0.7, onlineEnemies * 0.04);
-
-        const hosp = enemies.filter(e => e.status.toLowerCase().includes("hospital")).length;
-        if (hosp < enemies.length * 0.5) threat += 0.1;
-
-        if ((chain.hits || 0) > 0) threat += 0.15;
-
-        //---------------------------------------------------
-        // RISK (chain collapse danger)
-        //---------------------------------------------------
         let risk = 0;
-        if (chain.timeLeft < 20) risk += 0.7;
-        else if (chain.timeLeft < 60) risk += 0.4;
-
-        if ((user.status || "").toLowerCase().includes("hospital"))
-            risk += 0.2;
-
-        //---------------------------------------------------
-        // AGGRESSION (hits per second)
-        //---------------------------------------------------
-        let aggression = 0;
-        if (this.lastUpdateTS > 0) {
-            const dt = (now - this.lastUpdateTS) / 1000;
-            aggression = (chain.hits || 0) / Math.max(1, dt);
+        let aggr = 0;
+        let inst = 0;
+        const onlineCount = enemies.filter(e => this.isOnline(e)).length;
+        threat += Math.min(1, onlineCount * 0.05);
+        if (c.hits > 0) threat += 0.1;
+        if (onlineCount > enemies.length * 0.4) threat += 0.1;
+        if (c.timeout < 45) risk += 0.6;
+        if (c.timeout < 80) risk += 0.3;
+        if ((user.status || "").toLowerCase().includes("hospital")) risk += 0.2;
+        if (this.lastTs > 0) {
+            const dt = (now - this.lastTs) / 1000;
+            if (dt > 0) {
+                aggr = c.hits / Math.max(1, dt);
+            }
         }
-
-        //---------------------------------------------------
-        // INSTABILITY (volatility metric)
-        //---------------------------------------------------
-        let instability = Math.abs((chain.timeLeft || 0) - 30) / 60;
-
-        //---------------------------------------------------
-        // PREDICTIONS
-        //---------------------------------------------------
-        const drop = chain.timeLeft < 120 ? (120 - chain.timeLeft) / 2 : 0;
-        const nextHit = onlineEnemies > 0
-            ? Math.round(onlineEnemies * threat * 2)
-            : 0;
-
-        //---------------------------------------------------
-        // TARGET SCORING
-        //---------------------------------------------------
-        const topTargets = this.scoreEnemies(enemies, now);
-
-        //---------------------------------------------------
-        // APPLY TO AI STATE
-        //---------------------------------------------------
+        inst = Math.abs(c.timeout - 60) / 100;
+        const nextHit = onlineCount > 0 ? Math.round(onlineCount * threat * 2) : 0;
+        const drop = c.timeout < 120 ? Math.round((120 - c.timeout) / 2) : 0;
         this.ai.threat = Math.min(1, threat);
         this.ai.risk = Math.min(1, risk);
-        this.ai.aggression = Math.min(1, aggression);
-        this.ai.instability = Math.min(1, instability);
-        this.ai.prediction = { drop: Math.max(0, drop), nextHit };
-        this.ai.topTargets = topTargets.slice(0, 10);
+        this.ai.aggression = Math.min(1, aggr);
+        this.ai.instability = Math.min(1, inst);
+        this.ai.prediction = { drop, nextHit };
+        this.ai.topTargets = this.scoreTargets(enemies).slice(0, 15);
         this.ai.notes = this.generateNotes();
+        this.lastTs = now;
     },
-
-    // -------------------------------------------------------
-    //  SCORING: Returns array sorted by score
-    // -------------------------------------------------------
-    scoreEnemies(list, now) {
-        return list.map(m => {
-            let score = 0;
-
-            // Level weight
-            score += (m.level || 1) * 2;
-
-            // Status penalties
-            const st = m.status.toLowerCase();
-            if (st.includes("hospital")) score -= 25;
-            if (st.includes("jail")) score -= 30;
-            if (st.includes("travel")) score -= 15;
-
-            // Recent activity
-            if ((m.last_action.timestamp || 0) > now - 300000)
-                score += 15;
-
-            return { ...m, score: Math.max(0, score) };
-        }).sort((a, b) => b.score - a.score);
+    isOnline(member) {
+        const ts = member.last_action?.timestamp || 0;
+        const now = Date.now();
+        return (now - ts) < 600000;
     },
-
-    // -------------------------------------------------------
-    //  NOTES FOR MAJOR UI
-    // -------------------------------------------------------
+    scoreTargets(list) {
+        const now = Date.now();
+        const scored = [];
+        for (const m of list) {
+            let s = 0;
+            s += (m.level || 1) * 1.5;
+            const state = (m.status || "").toLowerCase();
+            if (state.includes("hospital")) s -= 25;
+            if (state.includes("travel")) s -= 10;
+            if (state.includes("jail")) s -= 10;
+            const ts = m.last_action?.timestamp || 0;
+            if ((now - ts) < 300000) s += 10;
+            s = Math.max(0, s);
+            scored.push({
+                id: m.id || m.ID || null,
+                name: m.name || "",
+                level: m.level || 0,
+                status: m.status || "",
+                last_action: m.last_action || {},
+                score: s
+            });
+        }
+        scored.sort((a, b) => b.score - a.score);
+        return scored;
+    },
     generateNotes() {
+        const notes = [];
         const a = this.ai;
         const c = this.state.chain;
-
-        const notes = [];
-
-        if (a.threat > 0.7) notes.push("High enemy activity detected.");
-        if (a.risk > 0.7) notes.push("Chain stability critical.");
-        if (c.hits > 0) notes.push("Chain engagement active.");
-        if (a.prediction.nextHit > 0) notes.push("Enemy movement likely.");
-        if (a.instability > 0.5) notes.push("Volatile battlefield conditions.");
-
+        if (a.threat > 0.7) notes.push("High enemy activity.");
+        if (a.risk > 0.7) notes.push("Chain risk elevated.");
+        if (c.hits > 0) notes.push("Chain in progress.");
+        if (a.prediction.nextHit > 0) notes.push("Enemy movement possible.");
+        if (a.instability > 0.5) notes.push("Unstable chain conditions.");
         return notes;
     },
-
-    // -------------------------------------------------------
-    //  FORMAT SITREP FOR MAJOR + SERGEANT
-    // -------------------------------------------------------
-    buildFactionMembers() {
-        const members = this.state.faction.members || {};
-        return Object.values(members).map(m => ({
-            id: m.ID || m.id,
-            name: m.name,
-            level: m.level,
-            status: m.status?.state || "",
-            last_action: m.last_action?.relative || "",
-            online: ((Date.now() - (m.last_action?.timestamp || 0)) < 600000)
-        }));
-    },
-
-    buildEnemyMembers() {
-        return this.ai.topTargets.map(t => ({
-            id: t.id,
-            name: t.name,
-            level: t.level,
-            status: t.status,
-            online: t.online,
-            score: t.score
-        }));
-    },
-
     dispatchSITREP() {
         const sitrep = {
             user: this.state.user,
             chain: this.state.chain,
-            factionMembers: this.buildFactionMembers(),
-            enemyFactionMembers: this.buildEnemyMembers(),
-            targets: {
-                personal: [],
-                war: [],
-                shared: [] // filled by Sergeant
-            },
+            factionMembers: this.state.factionMembers,
+            enemies: this.ai.topTargets,
+            war: this.state.faction.wars || {},
+            targets: { personal: [], shared: [], war: this.ai.topTargets },
             ai: this.ai
         };
-
-        this.general.signals.dispatch("SITREP_UPDATE", sitrep);
-
-        if (typeof WARDBG === "function") WARDBG("Colonel: SITREP dispatched");
+        this.nexus.events.emit("SITREP_UPDATE", sitrep);
     },
-
-    // -------------------------------------------------------
-    //  AI ANSWER BACK TO MAJOR
-    // -------------------------------------------------------
-    answerAI(payload) {
-        const question = payload?.question.toLowerCase() || "";
-        let response = "I don't understand.";
-
-        const a = this.ai;
-        const c = this.state.chain;
-
-        if (question.includes("threat"))
-            response = `Threat level: ${Math.round(a.threat * 100)}%.`;
-
-        else if (question.includes("risk"))
-            response = `Collapse risk: ${Math.round(a.risk * 100)}%.`;
-
-        else if (question.includes("next hit"))
-            response = `Estimated next hostile action: ${a.prediction.nextHit}.`;
-
-        else if (question.includes("chain"))
-            response = `Chain status: ${c.hits} hits, ${c.timeLeft}s remaining.`;
-
-        else if (question.includes("targets"))
-            response = `Top hostile: ${this.ai.topTargets[0]?.name || "None"}.`;
-
-        this.general.signals.dispatch("ASK_COLONEL_RESPONSE", { answer: response });
+    answer(payload) {
+        const q = (payload?.question || "").toLowerCase();
+        let r = "I need more information.";
+        if (q.includes("threat")) r = "Threat level " + Math.round(this.ai.threat * 100) + "%.";
+        else if (q.includes("risk")) r = "Chain collapse risk " + Math.round(this.ai.risk * 100) + "%.";
+        else if (q.includes("next") && q.includes("hit")) r = "Next hit estimate: " + this.ai.prediction.nextHit + ".";
+        else if (q.includes("chain")) r = "Chain: " + this.state.chain.hits + " hits, " + this.state.chain.timeout + "s remaining.";
+        else if (q.includes("best") || q.includes("target")) {
+            const t = this.ai.topTargets[0];
+            r = t ? "Top target: " + t.name + " (score " + t.score + ")" : "No suitable targets.";
+        }
+        this.nexus.events.emit("COLONEL_RESPONSE", { response: r });
     }
 };
 
-// Register with WAR_GENERAL
-if (typeof WAR_GENERAL !== "undefined") {
-    WAR_GENERAL.register("Colonel", Colonel);
-} else if (typeof WARDBG === "function") {
-    WARDBG("Colonel failed to register: WAR_GENERAL missing");
-}
+/* BLOCK: SELF REGISTRATION */
+
+window.__NEXUS_OFFICERS = window.__NEXUS_OFFICERS || [];
+window.__NEXUS_OFFICERS.push({ name: "Colonel", module: Colonel });
 
 })();
