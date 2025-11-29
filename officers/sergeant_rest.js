@@ -20,7 +20,7 @@
 (function() {
 "use strict";
 
-const DB = "https://console.firebase.google.com/u/0/project/torn-war-room/database/torn-war-room-default-rtdb/data/~2F";
+const DB = "https://torn-war-room-default-rtdb.firebaseio.com";
 
 const Sergeant = {
 
@@ -29,57 +29,59 @@ const Sergeant = {
     factionId: null,
     lastFactionSync: 0,
 
-    // Local shared targets, in-memory & persistent
+    // Local shared targets (cached)
     sharedTargets: [],
     writeQueue: [],
     writeTimer: null,
 
-    // Polling timers
+    // Firebase poll timer
     pollTimer: null,
 
-    // -----------------------------------------------------
-    // INIT
-    // -----------------------------------------------------
     init(G) {
         this.general = G;
+
+        // Load cached targets
         this.loadLocal();
 
-        // Listen for SITREP so we know factionId
-        this.general.signals.listen("SITREP_UPDATE", data => {
-            if (data?.factionMembers && data.user?.id) {
-                // Determine factionId from colonel's SITREP
-                const factionMembers = data.factionMembers;
-                const self = factionMembers.find(x => x.id === data.user.id);
-                if (!self) return;
-            }
+        // Listen for RAW_INTEL (RELIABLE factionId source)
+        this.general.signals.listen("RAW_INTEL", intel => {
+            this.handleRawIntel(intel);
         });
 
-        // Listen for RAW_INTEL so we know faction.id when Lieutenant pulls Torn API
-        this.general.signals.listen("RAW_INTEL", data => {
-            const fid = data?.faction?.id;
-            if (!fid) return;
-
-            if (this.factionId !== fid) {
-                this.factionId = fid;
-                this.startPolling();
-            }
-
-            // Sync members → Firebase
-            this.syncMembersToFirebase(data.faction.members || {});
+        // Listen for SITREP to update UI when sharedTargets change
+        this.general.signals.listen("SITREP_UPDATE", sitrep => {
+            // Major gets notified when Sergeant updates list
         });
 
-        // Listen for "REQUEST_ADD_SHARED_TARGET"
+        // From Major → add shared target
         this.general.signals.listen("REQUEST_ADD_SHARED_TARGET", t => {
             this.addSharedTarget(t);
         });
 
-        // For the Major to get updates
-        this.general.signals.dispatch("SHARED_TARGETS_UPDATED", this.sharedTargets);
+        if (typeof WARDBG === "function") {
+            WARDBG("Sergeant online (v7.6 REST)");
+        }
     },
 
-    // -----------------------------------------------------
-    // LOCAL STORAGE
-    // -----------------------------------------------------
+    // -------------------------------------------------------
+    // RAW_INTEL handler — extract factionId reliably
+    // -------------------------------------------------------
+    handleRawIntel(intel) {
+        const fid = intel?.faction?.id;
+        if (!fid) return;
+
+        if (this.factionId !== fid) {
+            this.factionId = fid;
+            this.startPolling();
+        }
+
+        // Sync faction members (mirror) every 5s
+        this.syncMembersToFirebase(intel.faction.members || {});
+    },
+
+    // -------------------------------------------------------
+    // LOCAL CACHE
+    // -------------------------------------------------------
     loadLocal() {
         try {
             const raw = localStorage.getItem("nexus_shared_targets");
@@ -90,28 +92,34 @@ const Sergeant = {
     },
 
     saveLocal() {
-        localStorage.setItem("nexus_shared_targets",
-            JSON.stringify(this.sharedTargets));
+        localStorage.setItem(
+            "nexus_shared_targets",
+            JSON.stringify(this.sharedTargets)
+        );
     },
 
-    // -----------------------------------------------------
-    // POLLING LOOP (Firebase REST)
-    // -----------------------------------------------------
+    // -------------------------------------------------------
+    // POLLING LOOP
+    // -------------------------------------------------------
     startPolling() {
+        if (!this.factionId) return;
+
         if (this.pollTimer) clearInterval(this.pollTimer);
 
-        // Poll every 5 seconds for full feature parity
+        // Poll every 5 seconds
         this.pollTimer = setInterval(() => {
-            if (!this.factionId) return;
-
             this.pollSharedTargets();
             this.pollCommanderOrders();
         }, 5000);
+
+        if (typeof WARDBG === "function") {
+            WARDBG("Sergeant: Polling started for faction " + this.factionId);
+        }
     },
 
-    // -----------------------------------------------------
-    // REST GET
-    // -----------------------------------------------------
+    // -------------------------------------------------------
+    // REST HELPERS
+    // -------------------------------------------------------
     restGet(path, cb) {
         GM_xmlhttpRequest({
             method: "GET",
@@ -119,15 +127,14 @@ const Sergeant = {
             onload: r => {
                 if (r.status === 200) {
                     try { cb(JSON.parse(r.responseText)); }
-                    catch { /* ignore */ }
+                    catch { cb(null); }
+                } else {
+                    cb(null);
                 }
             }
         });
     },
 
-    // -----------------------------------------------------
-    // REST PUT
-    // -----------------------------------------------------
     restPut(path, value, cb) {
         GM_xmlhttpRequest({
             method: "PUT",
@@ -138,9 +145,6 @@ const Sergeant = {
         });
     },
 
-    // -----------------------------------------------------
-    // REST PATCH
-    // -----------------------------------------------------
     restPatch(path, value, cb) {
         GM_xmlhttpRequest({
             method: "PATCH",
@@ -151,64 +155,73 @@ const Sergeant = {
         });
     },
 
-    // -----------------------------------------------------
-    // SYNC FACTION MEMBERS → Firebase
-    // -----------------------------------------------------
-    syncMembersToFirebase(members) {
+    // -------------------------------------------------------
+    // FACTION MIRROR (write members)
+    // -------------------------------------------------------
+    syncMembersToFirebase(membersObj) {
         if (!this.factionId) return;
 
         const now = Date.now();
-        if (now - this.lastFactionSync < 5000) return; // limit to 1 write per 5s
+        if (now - this.lastFactionSync < 5000) return; // limit
+
         this.lastFactionSync = now;
 
+        // Firebase path
         const base = `factions/${this.factionId}/members`;
 
         const payload = {};
-        for (const [id, m] of Object.entries(members)) {
+
+        for (const [id, m] of Object.entries(membersObj)) {
             payload[id] = {
                 id,
                 name: m.name,
                 level: m.level || 0,
                 status: m.status?.state || "",
-                updated: now
+                updated: now,
+                last_action: m.last_action?.relative || ""
             };
         }
 
-        // Batch update (PATCH)
         this.restPatch(base, payload);
     },
 
-    // -----------------------------------------------------
-    // ADD SHARED TARGET
-    // -----------------------------------------------------
+    // -------------------------------------------------------
+    // ADD SHARED TARGET — from Major
+    // -------------------------------------------------------
     addSharedTarget(t) {
         if (!t?.id || !t?.name) return;
 
         t.timestamp = Date.now();
 
-        // Replace or add locally
+        // Replace or add
         this.sharedTargets = this.sharedTargets.filter(x => x.id !== t.id);
         this.sharedTargets.push(t);
         this.saveLocal();
 
-        // Notify Major
-        this.general.signals.dispatch("SHARED_TARGETS_UPDATED", this.sharedTargets);
+        // Notify Major UI
+        this.general.signals.dispatch(
+            "SHARED_TARGETS_UPDATED",
+            this.sharedTargets
+        );
 
-        // Push to Firebase
+        // Push to Firebase (queued)
         if (this.factionId)
             this.enqueueWrite(`factions/${this.factionId}/targets/${t.id}`, t);
     },
 
-    // -----------------------------------------------------
-    // QUEUED WRITES (BATCHED)
-    // -----------------------------------------------------
+    // -------------------------------------------------------
+    // WRITE QUEUE (batch writes)
+    // -------------------------------------------------------
     enqueueWrite(path, value) {
         this.writeQueue.push({ path, value });
 
         if (this.writeTimer) clearTimeout(this.writeTimer);
 
-        // Batch writes every 1200ms
-        this.writeTimer = setTimeout(() => this.flushWriteQueue(), 1200);
+        // Batch every 1200ms
+        this.writeTimer = setTimeout(
+            () => this.flushWriteQueue(),
+            1200
+        );
     },
 
     flushWriteQueue() {
@@ -220,56 +233,58 @@ const Sergeant = {
         });
     },
 
-    // -----------------------------------------------------
-    // POLL: SHARED TARGETS
-    // -----------------------------------------------------
+    // -------------------------------------------------------
+    // POLL SHARED TARGETS (Firebase → local)
+    // -------------------------------------------------------
     pollSharedTargets() {
         if (!this.factionId) return;
-
         const path = `factions/${this.factionId}/targets`;
+
         this.restGet(path, data => {
             if (!data) return;
 
-            // Convert map → array
-            const remoteList = Object.values(data);
-
-            // Detect changes
+            const remoteArray = Object.values(data || {});
+            const remoteJson = JSON.stringify(remoteArray);
             const localJson = JSON.stringify(this.sharedTargets);
-            const remoteJson = JSON.stringify(remoteList);
 
-            if (localJson !== remoteJson) {
-                this.sharedTargets = remoteList;
+            if (remoteJson !== localJson) {
+                this.sharedTargets = remoteArray;
                 this.saveLocal();
 
-                // Notify Major
                 this.general.signals.dispatch(
                     "SHARED_TARGETS_UPDATED",
                     this.sharedTargets
                 );
+
+                if (typeof WARDBG === "function") WARDBG("Sergeant: Shared targets updated");
             }
         });
     },
 
-    // -----------------------------------------------------
-    // POLL: COMMANDER ORDERS
-    // -----------------------------------------------------
+    // -------------------------------------------------------
+    // POLL COMMANDER ORDERS
+    // -------------------------------------------------------
     pollCommanderOrders() {
         if (!this.factionId) return;
 
         const path = `factions/${this.factionId}/orders`;
+
         this.restGet(path, orders => {
             if (!orders) return;
 
-            // Dispatch commander orders to Major / Colonel
+            // Provide to Colonel + Major
             this.general.signals.dispatch("COMMANDER_ORDERS", orders);
+
+            if (typeof WARDBG === "function") WARDBG("Sergeant: Orders update received");
         });
     }
 };
 
+// Register
 if (typeof WAR_GENERAL !== "undefined") {
     WAR_GENERAL.register("Sergeant", Sergeant);
 } else if (typeof WARDBG === "function") {
-    WARDBG("SERGEANT FAILED TO REGISTER: WAR_GENERAL missing");
+    WARDBG("Sergeant FAILED to register: WAR_GENERAL missing");
 }
 
 })();
