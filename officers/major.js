@@ -1,19 +1,17 @@
-// major.js — WAR ROOM COMMAND INTERFACE (v2.0 Ultimate)
+// major.js — WAR ROOM COMMAND INTERFACE (v3.0 Ultimate)
 
 ////////////////////////////////////////////////////////////
 // MAJOR — THE WAR ROOM
-// High-Fidelity Tactical HUD for Torn City
 // Features:
-// - Visual/Audio Chain Alerts
-// - Direct Attack Links
-// - Advanced Enemy Filtering
-// - Real-time Momentum Graphs
+// - Real-time Charts (Chain Momentum & War Aggression)
+// - Dedicated WAR Tab with Conflict Metrics
+// - Advanced Target System (Personal / War AI / Shared)
+// - Faction Roster with Status
+// - Cyber-Tactical "Glass" HUD
 ////////////////////////////////////////////////////////////
 
 (function(){
 "use strict";
-
-/* BLOCK: STATE & CONFIG */
 
 const Major = {
     nexus: null,
@@ -22,38 +20,33 @@ const Major = {
     drawer: null,
     btn: null,
     
-    // UI State
+    // State
     detached: false,
     attachedSide: "left",
     activeTab: "overview",
-    targetSubTab: "personal",
-    strategyMode: "HYBRID",
+    targetSubTab: "war", // Default to War targets
     
-    // Filters
-    filterHideHosp: false,
-    filterHideTravel: false,
-
-    // Alerts
-    alerts: {
-        enabled: true,
-        threshold: 90, // seconds
-        flash: true,
-        audio: false // browser policy often blocks auto-audio, but we provide the toggle
-    },
+    // Configuration
+    alerts: { enabled: true, threshold: 90, flash: true, audio: false },
+    dataScale: 1.0,
     
     // Internal
+    chartInstances: {}, // Store chart instances to prevent memory leaks
     renderHookApplied: false,
-    dataScale: 1.0,
-    audioCtx: null, // Simple oscillator for beeps
 
     data: {
         user: {},
         faction: [],
-        enemy: [],
         chain: {},
-        targets: { personal: [], war: [], shared: [] },
-        ai: {},
-        aiMemory: {}
+        war: {},
+        // Targets split by source
+        targets: { 
+            personal: [], 
+            war: [],     // Populated by Colonel AI
+            shared: []   // Populated by Sergeant (Firebase)
+        },
+        ai: { topTargets: [] },
+        aiMemory: { chain: { pace: [] }, war: { aggression: [] } }
     }
 };
 
@@ -63,36 +56,37 @@ Major.init = function(nexus){
     this.nexus = nexus;
     this.createHost();
     this.createUI();
-    this.applyWarRoomStyles();
+    this.applyTacticalStyles();
     this.bindInteractions();
     this.bindNexusEvents();
     this.applyRenderHook();
-    
-    // Load saved settings
+    this.loadSettings();
+};
+
+Major.loadSettings = function(){
     try {
-        const saved = localStorage.getItem("WN_MAJOR_OPTS");
+        const saved = localStorage.getItem("WN_MAJOR_CFG");
         if(saved) {
-            const parsed = JSON.parse(saved);
-            this.alerts = { ...this.alerts, ...parsed.alerts };
-            this.detached = parsed.detached || false;
-            this.attachedSide = parsed.attachedSide || "left";
-            this.dataScale = parsed.dataScale || 1.0;
+            const p = JSON.parse(saved);
+            this.alerts = p.alerts || this.alerts;
+            this.detached = p.detached || false;
+            this.attachedSide = p.attachedSide || "left";
+            this.dataScale = p.dataScale || 1.0;
             this.applyWindowSettings();
         }
     } catch(e) {}
 };
 
 Major.saveSettings = function(){
-    const save = {
+    localStorage.setItem("WN_MAJOR_CFG", JSON.stringify({
         alerts: this.alerts,
         detached: this.detached,
         attachedSide: this.attachedSide,
         dataScale: this.dataScale
-    };
-    localStorage.setItem("WN_MAJOR_OPTS", JSON.stringify(save));
+    }));
 };
 
-/* BLOCK: HOST & SHADOW DOM */
+/* BLOCK: UI SCAFFOLDING */
 
 Major.createHost = function(){
     if (document.getElementById("war-nexus-major")) return;
@@ -104,47 +98,47 @@ Major.createHost = function(){
     document.body.appendChild(this.host);
 };
 
-/* BLOCK: UI SCAFFOLDING */
-
 Major.createUI = function(){
-    const ICONS = {
+    // Icons
+    const I = {
         dash: `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>`,
-        target: `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-3 13l-1-1 4-4-4-4 1-1 5 5-5 5z"/></svg>`,
+        war: `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm6 12H6v-1c0-2 4-3.1 6-3.1s6 1.1 6 3.1v1z"/></svg>`,
         chain: `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M17 7h-4v2h4c1.65 0 3 1.35 3 3s-1.35 3-3 3h-4v2h4c2.76 0 5-2.24 5-5s-2.24-5-5-5zm-6 8H7c-1.65 0-3-1.35-3-3s1.35-3 3-3h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-2zm-3-4h8v2H8z"/></svg>`,
-        list: `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg>`,
-        settings: `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.23.09.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65zM12 15.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z"/></svg>`
+        target: `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-3 13l-1-1 4-4-4-4 1-1 5 5-5 5z"/></svg>`,
+        faction: `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>`,
+        settings: `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.23.09.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65z"/></svg>`
     };
 
     this.shadow.innerHTML = `
         <div id="wnx-trigger">W</div>
+        <div id="wnx-alert-layer"></div>
         
-        <div id="wnx-alert-flash"></div>
-
         <div id="wnx-drawer" class="closed">
             <div id="wnx-sidebar">
                 <div class="wnx-brand">WN</div>
                 <div class="wnx-nav">
-                    <button data-t="overview" class="active">${ICONS.dash}</button>
-                    <button data-t="enemy">${ICONS.target}</button>
-                    <button data-t="chain">${ICONS.chain}</button>
-                    <button data-t="targets">${ICONS.list}</button>
+                    <button data-t="overview" class="active">${I.dash}</button>
+                    <button data-t="war">${I.war}</button>
+                    <button data-t="chain">${I.chain}</button>
+                    <button data-t="targets">${I.target}</button>
+                    <button data-t="faction">${I.faction}</button>
                     <div class="spacer"></div>
-                    <button data-t="settings">${ICONS.settings}</button>
+                    <button data-t="settings">${I.settings}</button>
                 </div>
             </div>
-
+            
             <div id="wnx-viewport">
                 <div class="wnx-header">
-                    <div class="wnx-title">WAR ROOM // <span id="wnx-tab-name">OVERVIEW</span></div>
-                    <div id="wnx-chain-mini" class="hidden">00:00</div>
-                    <button id="wnx-close-mobile">✕</button>
+                    <div class="wnx-title">WAR NEXUS // <span id="wnx-tab-name">OVERVIEW</span></div>
+                    <button id="wnx-close">✕</button>
                 </div>
                 
                 <div id="wnx-panels">
                     <div id="p-overview" class="panel active"></div>
-                    <div id="p-enemy" class="panel"></div>
+                    <div id="p-war" class="panel"></div>
                     <div id="p-chain" class="panel"></div>
                     <div id="p-targets" class="panel"></div>
+                    <div id="p-faction" class="panel"></div>
                     <div id="p-settings" class="panel"></div>
                 </div>
             </div>
@@ -153,184 +147,118 @@ Major.createUI = function(){
 
     this.drawer = this.shadow.querySelector("#wnx-drawer");
     this.btn = this.shadow.querySelector("#wnx-trigger");
-    this.flashLayer = this.shadow.querySelector("#wnx-alert-flash");
+    this.alertLayer = this.shadow.querySelector("#wnx-alert-layer");
     
-    this.shadow.querySelector("#wnx-close-mobile").onclick = () => {
-        this.drawer.classList.remove("open");
-    };
+    this.shadow.querySelector("#wnx-close").onclick = () => this.drawer.classList.remove("open");
 };
 
-/* BLOCK: WAR ROOM STYLES (Cyber-Tactical) */
+/* BLOCK: STYLES */
 
-Major.applyWarRoomStyles = function(){
+Major.applyTacticalStyles = function(){
     const s = document.createElement("style");
     s.textContent = `
         :host {
-            --bg-dark: #050505;
-            --bg-panel: rgba(10, 12, 16, 0.96);
+            --bg: #050505;
+            --panel: rgba(14, 18, 22, 0.95);
             --border: #333;
-            --primary: #0ff;        /* Cyan */
-            --primary-dim: rgba(0, 255, 255, 0.1);
-            --danger: #ff003c;      /* Cyber Red */
-            --danger-dim: rgba(255, 0, 60, 0.15);
-            --warning: #fcee0a;     /* Yellow */
-            --success: #00ff9f;
-            --text-main: #eee;
-            --text-mute: #666;
-            --font-mono: "Courier New", Consolas, monospace;
-            --font-ui: "Segoe UI", Roboto, sans-serif;
+            --primary: #0ff;
+            --danger: #ff003c;
+            --warn: #ffcc00;
+            --ok: #00ff9d;
+            --text: #eee;
+            --mute: #666;
+            --mono: "Consolas", monospace;
+            --ui: "Segoe UI", sans-serif;
             all: initial;
         }
-
-        /* RESET */
         * { box-sizing: border-box; }
-
+        
         /* TRIGGER */
         #wnx-trigger {
-            position: fixed; bottom: 15px; left: 15px;
-            width: 50px; height: 50px;
-            background: #000; border: 2px solid var(--primary);
-            color: var(--primary);
-            font-family: var(--font-mono); font-weight: 900; font-size: 20px;
+            position: fixed; bottom: 15px; left: 15px; width: 48px; height: 48px;
+            background: #000; border: 2px solid var(--primary); color: var(--primary);
             display: flex; align-items: center; justify-content: center;
-            cursor: pointer; z-index: 10000;
-            box-shadow: 0 0 10px var(--primary-dim);
-            transition: 0.2s;
-            clip-path: polygon(10% 0, 100% 0, 100% 90%, 90% 100%, 0 100%, 0 10%);
+            font-family: var(--mono); font-weight: 900; font-size: 20px;
+            cursor: pointer; z-index: 10000; box-shadow: 0 0 15px rgba(0,255,255,0.2);
+            transition: 0.2s; clip-path: polygon(10% 0, 100% 0, 100% 90%, 90% 100%, 0 100%, 0 10%);
         }
-        #wnx-trigger:hover { transform: scale(1.1); box-shadow: 0 0 20px var(--primary); background: var(--primary-dim); }
-
-        /* ALERT FLASH OVERLAY */
-        #wnx-alert-flash {
-            position: fixed; inset: 0;
+        #wnx-trigger:hover { transform: scale(1.1); background: rgba(0,255,255,0.1); }
+        
+        /* ALERT OVERLAY */
+        #wnx-alert-layer {
+            position: fixed; inset: 0; pointer-events: none; z-index: 9999;
             background: radial-gradient(circle, transparent 50%, rgba(255,0,60,0.4) 100%);
-            z-index: 9999;
-            pointer-events: none;
-            opacity: 0;
-            transition: opacity 0.2s;
+            opacity: 0; transition: opacity 0.2s;
         }
-        #wnx-alert-flash.active { opacity: 1; animation: alarmPulse 0.8s infinite; }
-
+        #wnx-alert-layer.active { opacity: 1; animation: pulse 0.8s infinite; }
+        
         /* DRAWER */
         #wnx-drawer {
-            position: fixed; top: 0; left: 0;
-            width: 400px; max-width: 100vw; height: 100vh;
-            background: var(--bg-panel);
-            border-right: 1px solid var(--border);
-            display: flex;
-            transform: translateX(-100%);
-            transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-            color: var(--text-main); font-family: var(--font-ui);
-            box-shadow: 10px 0 50px #000;
+            position: fixed; top: 0; left: 0; height: 100vh; width: 420px; max-width: 100vw;
+            background: var(--panel); border-right: 1px solid var(--border);
+            display: flex; transform: translateX(-100%); transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+            color: var(--text); font-family: var(--ui); box-shadow: 10px 0 50px #000;
         }
         #wnx-drawer.open { transform: translateX(0); }
-
+        
         /* SIDEBAR */
-        #wnx-sidebar {
-            width: 50px; background: #000;
-            border-right: 1px solid var(--border);
-            display: flex; flex-direction: column; align-items: center;
-            padding: 10px 0;
-        }
-        .wnx-brand { color: var(--danger); font-family: var(--font-mono); font-weight: 900; margin-bottom: 20px; letter-spacing: -1px; }
-        .wnx-nav button {
-            background: none; border: none; color: var(--text-mute);
-            padding: 12px; cursor: pointer; transition: 0.2s;
-            width: 100%; border-left: 2px solid transparent;
-        }
-        .wnx-nav button.active { color: var(--primary); border-left-color: var(--primary); background: var(--primary-dim); }
+        #wnx-sidebar { width: 50px; background: #000; border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; padding: 10px 0; }
+        .wnx-brand { color: var(--danger); font-family: var(--mono); font-weight: 900; margin-bottom: 20px; }
+        .wnx-nav button { background: none; border: none; color: var(--mute); padding: 12px; cursor: pointer; width: 100%; border-left: 2px solid transparent; transition: 0.2s; }
         .wnx-nav button:hover { color: #fff; }
+        .wnx-nav button.active { color: var(--primary); border-left-color: var(--primary); background: rgba(0,255,255,0.05); }
         .wnx-nav svg { width: 22px; height: 22px; }
         .spacer { flex: 1; }
-
+        
         /* VIEWPORT */
         #wnx-viewport { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: linear-gradient(180deg, rgba(0,255,255,0.02) 0%, #000 100%); }
-        .wnx-header {
-            height: 50px; border-bottom: 1px solid var(--border);
-            display: flex; align-items: center; padding: 0 15px;
-            background: rgba(0,0,0,0.5); justify-content: space-between;
-        }
-        .wnx-title { font-family: var(--font-mono); font-size: 12px; color: var(--text-mute); text-transform: uppercase; letter-spacing: 1px; }
+        .wnx-header { height: 50px; border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 15px; background: rgba(0,0,0,0.5); justify-content: space-between; }
+        .wnx-title { font-family: var(--mono); font-size: 12px; color: var(--mute); letter-spacing: 1px; }
         .wnx-title span { color: var(--primary); font-weight: bold; }
+        #wnx-close { background: none; border: none; color: var(--mute); font-size: 18px; cursor: pointer; }
         
-        #wnx-chain-mini {
-            font-family: var(--font-mono); color: var(--danger); font-weight: bold;
-            border: 1px solid var(--danger); padding: 2px 6px; font-size: 11px;
-            background: rgba(255,0,0,0.1);
-        }
-        #wnx-chain-mini.hidden { display: none; }
-        #wnx-close-mobile { background: none; border: none; color: var(--text-mute); font-size: 18px; cursor: pointer; }
-
         /* PANELS */
-        #wnx-panels { flex: 1; overflow-y: auto; padding: 0; scrollbar-width: thin; scrollbar-color: #333 #000; }
-        .panel { display: none; padding: 15px; animation: slideIn 0.2s ease; }
+        #wnx-panels { flex: 1; overflow-y: auto; padding: 0; }
+        .panel { display: none; padding: 15px; animation: fadeUp 0.2s ease; }
         .panel.active { display: block; }
-
-        /* COMPONENTS */
-        .hud-card {
-            background: rgba(255,255,255,0.02); border: 1px solid var(--border);
-            padding: 12px; margin-bottom: 10px; position: relative;
-        }
-        .hud-card::before {
-            content: ''; position: absolute; top: 0; left: 0; width: 4px; height: 100%; background: var(--border);
-        }
-        .hud-card.prio::before { background: var(--primary); }
-        .hud-card.alert::before { background: var(--danger); }
         
-        .hud-header {
-            font-family: var(--font-mono); font-size: 10px; color: var(--text-mute);
-            margin-bottom: 8px; text-transform: uppercase; display: flex; justify-content: space-between;
-        }
+        /* CARDS */
+        .card { background: rgba(255,255,255,0.02); border: 1px solid var(--border); padding: 12px; margin-bottom: 10px; position: relative; }
+        .card.prio::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--primary); }
+        .card-head { font-family: var(--mono); font-size: 10px; color: var(--mute); margin-bottom: 8px; text-transform: uppercase; display: flex; justify-content: space-between; }
         
-        .big-stat { font-size: 24px; font-family: var(--font-mono); color: #fff; font-weight: bold; }
-        .sub-stat { font-size: 11px; color: var(--text-mute); }
-
-        /* BUTTONS */
-        .btn-act {
-            background: var(--bg-dark); border: 1px solid var(--border);
-            color: var(--text-main); padding: 6px 12px; cursor: pointer;
-            font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
-            transition: 0.2s;
-        }
-        .btn-act:hover { border-color: var(--primary); color: var(--primary); }
-        .btn-act.danger:hover { border-color: var(--danger); color: var(--danger); }
-        .btn-act.active { background: var(--primary); color: #000; border-color: var(--primary); font-weight: bold; }
-
-        .btn-atk {
-            display: inline-block; text-decoration: none;
-            background: var(--danger-dim); border: 1px solid var(--danger);
-            color: var(--danger); padding: 2px 6px; font-size: 9px;
-            font-family: var(--font-mono); letter-spacing: 1px;
-            transition: 0.2s;
-        }
-        .btn-atk:hover { background: var(--danger); color: #000; }
-
-        /* TABLES */
-        table { width: 100%; border-collapse: collapse; font-size: 11px; }
-        th { text-align: left; color: var(--text-mute); font-family: var(--font-mono); font-size: 9px; padding: 5px; border-bottom: 1px solid var(--border); }
-        td { padding: 8px 5px; border-bottom: 1px solid rgba(255,255,255,0.05); }
-        
-        /* UTILS */
+        /* DATA UTILS */
+        .stat-lg { font-size: 24px; font-family: var(--mono); color: #fff; font-weight: bold; }
+        .stat-sm { font-size: 11px; color: var(--mute); }
         .text-c { color: var(--primary); }
         .text-r { color: var(--danger); }
-        .text-y { color: var(--warning); }
+        .text-y { color: var(--warn); }
+        .text-g { color: var(--ok); }
         .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        .flex-row { display: flex; gap: 8px; align-items: center; }
+        .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; }
         
-        /* ANIMATIONS */
-        @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes alarmPulse { 0% { opacity: 0.1; } 50% { opacity: 0.6; } 100% { opacity: 0.1; } }
-
-        /* MOBILE OVERRIDES */
-        @media (max-width: 450px) {
-            #wnx-drawer { width: 100%; }
-            .hide-mob { display: none; }
-        }
+        /* TABLES */
+        table { width: 100%; border-collapse: collapse; font-size: 11px; }
+        th { text-align: left; color: var(--mute); font-family: var(--mono); font-size: 9px; padding: 6px 4px; border-bottom: 1px solid var(--border); }
+        td { padding: 8px 4px; border-bottom: 1px solid rgba(255,255,255,0.05); color: var(--text); }
+        tr:last-child td { border-bottom: none; }
+        
+        /* BUTTONS & LINKS */
+        .btn-tab { background: #000; border: 1px solid var(--border); color: var(--text); padding: 6px; cursor: pointer; font-family: var(--mono); font-size: 10px; flex: 1; text-align: center; }
+        .btn-tab.active { background: var(--primary); color: #000; border-color: var(--primary); font-weight: bold; }
+        
+        .btn-atk { text-decoration: none; background: rgba(255,0,60,0.1); border: 1px solid var(--danger); color: var(--danger); padding: 2px 6px; font-size: 9px; font-family: var(--mono); transition: 0.2s; }
+        .btn-atk:hover { background: var(--danger); color: #000; }
+        
+        @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes pulse { 0% { opacity: 0.1; } 50% { opacity: 0.6; } 100% { opacity: 0.1; } }
+        
+        @media (max-width: 450px) { #wnx-drawer { width: 100%; } }
     `;
     this.shadow.appendChild(s);
 };
 
-/* BLOCK: LOGIC & BINDINGS */
+/* BLOCK: BINDINGS */
 
 Major.bindInteractions = function(){
     this.btn.onclick = () => {
@@ -338,7 +266,7 @@ Major.bindInteractions = function(){
         if(this.drawer.classList.contains("open")) this.nexus.events.emit("UI_DRAWER_OPENED");
     };
 
-    const tabName = this.shadow.querySelector("#wnx-tab-name");
+    const name = this.shadow.querySelector("#wnx-tab-name");
     this.shadow.querySelectorAll(".wnx-nav button").forEach(b => {
         b.onclick = () => {
             if(b.classList.contains("spacer")) return;
@@ -348,9 +276,9 @@ Major.bindInteractions = function(){
             b.classList.add("active");
             this.activeTab = b.dataset.t;
             this.shadow.querySelector(`#p-${this.activeTab}`).classList.add("active");
-            tabName.textContent = this.activeTab.toUpperCase();
+            name.textContent = this.activeTab.toUpperCase();
             this.renderActiveTab();
-        }
+        };
     });
 };
 
@@ -358,90 +286,51 @@ Major.bindNexusEvents = function(){
     this.nexus.events.on("SITREP_UPDATE", d => {
         this.data.user = d.user;
         this.data.faction = d.factionMembers;
-        this.data.enemy = d.enemyMembers;
         this.data.chain = d.chain;
-        this.data.targets = d.targets || this.data.targets;
+        this.data.war = d.war;
         this.data.ai = d.ai;
+        // Targets: Merge/Update
+        this.data.targets.personal = d.targets?.personal || [];
+        this.data.targets.war = d.ai?.topTargets || []; // AI populates War targets
+        this.data.targets.shared = d.targets?.shared || this.data.targets.shared;
+        
         this.checkAlerts();
         this.renderActiveTab();
-        this.updateMiniHeader();
     });
     
+    this.nexus.events.on("SHARED_TARGETS_UPDATED", list => {
+        this.data.targets.shared = list;
+        if(this.activeTab === "targets") this.renderTargets();
+    });
+
     this.nexus.events.on("AI_MEMORY_UPDATE", mem => {
         this.data.aiMemory = mem || {};
-        if(this.activeTab === "chain") this.renderChainGraph();
+        if(this.activeTab === "chain" || this.activeTab === "war") this.renderActiveTab();
     });
 };
 
 Major.applyRenderHook = function(){
     if(this.renderHookApplied) return;
-    const oldRender = this.renderActiveTab.bind(this);
+    const old = this.renderActiveTab.bind(this);
     this.renderActiveTab = function(){
-        oldRender();
-        if(this.activeTab === "chain") this.renderChainGraph();
+        old();
+        if(this.activeTab === "chain") this.renderChainChart();
+        if(this.activeTab === "war") this.renderWarChart();
     };
     this.renderHookApplied = true;
 };
 
-/* BLOCK: ALERT SYSTEM */
+/* BLOCK: ALERTS */
 
 Major.checkAlerts = function(){
-    if(!this.alerts.enabled) {
-        this.flashLayer.classList.remove("active");
-        return;
-    }
-
+    if(!this.alerts.enabled) { this.alertLayer.classList.remove("active"); return; }
     const c = this.data.chain || {};
     const t = c.timeLeft ?? c.timeout ?? 0;
     
-    // Trigger if chain active (>0 hits) and timeout < threshold
     if(c.hits > 0 && t > 0 && t <= this.alerts.threshold){
-        if(this.alerts.flash) this.flashLayer.classList.add("active");
-        if(this.alerts.audio) this.playBeep();
+        if(this.alerts.flash) this.alertLayer.classList.add("active");
     } else {
-        this.flashLayer.classList.remove("active");
-    }
-};
-
-Major.playBeep = function(){
-    // Simple throttle to prevent ear death
-    const now = Date.now();
-    if(this.lastBeep && (now - this.lastBeep < 2000)) return; 
-    
-    try {
-        if(!this.audioCtx) this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        if(this.audioCtx.state === 'suspended') this.audioCtx.resume();
-
-        const osc = this.audioCtx.createOscillator();
-        const gain = this.audioCtx.createGain();
-        osc.connect(gain);
-        gain.connect(this.audioCtx.destination);
-        
-        osc.type = 'square';
-        osc.frequency.setValueAtTime(440, this.audioCtx.currentTime); // A4
-        osc.frequency.exponentialRampToValueAtTime(880, this.audioCtx.currentTime + 0.1);
-        
-        gain.gain.setValueAtTime(0.1, this.audioCtx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, this.audioCtx.currentTime + 0.1);
-        
-        osc.start();
-        osc.stop(this.audioCtx.currentTime + 0.1);
-        this.lastBeep = now;
-    } catch(e) {}
-};
-
-Major.updateMiniHeader = function(){
-    const el = this.shadow.querySelector("#wnx-chain-mini");
-    const c = this.data.chain || {};
-    const t = c.timeLeft ?? c.timeout ?? 0;
-    
-    if(c.hits > 0){
-        el.classList.remove("hidden");
-        el.textContent = `${t}s`;
-        el.style.color = t < 60 ? "var(--danger)" : "var(--primary)";
-        el.style.borderColor = t < 60 ? "var(--danger)" : "var(--primary)";
-    } else {
-        el.classList.add("hidden");
+        this.alertLayer.classList.remove("active");
     }
 };
 
@@ -450,101 +339,178 @@ Major.updateMiniHeader = function(){
 Major.renderActiveTab = function(){
     switch(this.activeTab){
         case "overview": this.renderOverview(); break;
-        case "enemy": this.renderEnemy(); break;
+        case "war": this.renderWar(); break;
         case "chain": this.renderChain(); break;
         case "targets": this.renderTargets(); break;
+        case "faction": this.renderFaction(); break;
         case "settings": this.renderSettings(); break;
     }
 };
 
-/* TAB: OVERVIEW */
 Major.renderOverview = function(){
     const p = this.shadow.querySelector("#p-overview");
     const u = this.data.user || {};
     const c = this.data.chain || {};
     const a = this.data.ai || {};
-    const t = c.timeLeft ?? c.timeout ?? 0;
     
-    if(!u.name) { p.innerHTML = "<div style='color:#666; padding:20px;'>INITIALIZING UPLINK...</div>"; return; }
-
-    const hpPct = u.max_hp ? (u.hp / u.max_hp) * 100 : 0;
-    const hpColor = hpPct < 30 ? "var(--danger)" : "var(--success)";
+    if(!u.name) { p.innerHTML = "<div style='padding:20px;color:#666'>WAITING FOR DATA...</div>"; return; }
+    
+    const t = c.timeLeft ?? c.timeout ?? 0;
+    const hpColor = u.hp < (u.max_hp*0.3) ? "var(--danger)" : "var(--ok)";
 
     p.innerHTML = `
-        <div class="hud-card prio">
-            <div class="hud-header">OPERATOR STATUS</div>
-            <div style="display:flex; justify-content:space-between; align-items:end;">
+        <div class="card prio">
+            <div class="card-head">OPERATOR</div>
+            <div style="display:flex; justify-content:space-between; align-items:flex-end;">
                 <div>
-                    <div class="big-stat" style="color:${hpColor}">${u.hp} <span style="font-size:12px;color:#666">/ ${u.max_hp}</span></div>
-                    <div class="sub-stat">${u.name} [Lv${u.level}]</div>
+                    <div class="stat-lg" style="color:${hpColor}">${u.hp}</div>
+                    <div class="stat-sm">HP / ${u.max_hp}</div>
                 </div>
-                <div style="text-align:right;">
-                    <div class="sub-stat" style="color:var(--primary);">${u.status}</div>
-                </div>
-            </div>
-            <div style="height:4px; background:#222; margin-top:8px; width:100%;">
-                <div style="height:100%; width:${hpPct}%; background:${hpColor}; transition: width 0.3s;"></div>
-            </div>
-        </div>
-
-        <div class="hud-card ${t < 60 && c.hits > 0 ? 'alert' : ''}">
-            <div class="hud-header">CHAIN LINK</div>
-            <div class="grid-2">
-                <div style="text-align:center;">
-                    <div class="big-stat text-c">${c.hits || 0}</div>
-                    <div class="sub-stat">HITS</div>
-                </div>
-                <div style="text-align:center;">
-                    <div class="big-stat ${t<60?'text-r':'text-main'}">${t}s</div>
-                    <div class="sub-stat">TIMEOUT</div>
+                <div style="text-align:right">
+                    <div class="stat-lg" style="color:var(--primary)">${u.name}</div>
+                    <div class="stat-sm">${u.status}</div>
                 </div>
             </div>
         </div>
-
-        <div class="hud-card">
-            <div class="hud-header">TACTICAL AI</div>
-            <div class="grid-2">
-                <div>THREAT: <span style="color:${a.threat > 0.5?'var(--danger)':'var(--success)'}">${(a.threat*100).toFixed(0)}%</span></div>
-                <div>RISK: <span style="color:${a.risk > 0.5?'var(--danger)':'var(--success)'}">${(a.risk*100).toFixed(0)}%</span></div>
+        
+        <div class="grid-2">
+            <div class="card">
+                <div class="card-head">CHAIN</div>
+                <div class="stat-lg text-c">${c.hits||0}</div>
+                <div class="stat-sm">HITS</div>
             </div>
-            <div style="margin-top:10px; font-size:11px; color:var(--text-mute); font-family:var(--font-mono); border-top:1px solid #222; padding-top:5px;">
-                ${(a.summary||[]).map(x => `> ${x}`).join('<br>')}
+            <div class="card">
+                <div class="card-head">TIMEOUT</div>
+                <div class="stat-lg ${t<60?'text-r':'text-text'}">${t}s</div>
+                <div class="stat-sm">REMAINING</div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-head">TACTICAL SUMMARY</div>
+            <div class="grid-3" style="text-align:center;">
+                <div><div class="text-c">${(a.threat*100).toFixed(0)}%</div><div class="stat-sm">THREAT</div></div>
+                <div><div class="text-r">${(a.risk*100).toFixed(0)}%</div><div class="stat-sm">RISK</div></div>
+                <div><div class="text-y">${(a.aggression*100).toFixed(0)}%</div><div class="stat-sm">AGGR</div></div>
             </div>
         </div>
     `;
 };
 
-/* TAB: ENEMY (With Filters & Attack Links) */
-Major.renderEnemy = function(){
-    const p = this.shadow.querySelector("#p-enemy");
-    let list = this.data.enemy || [];
+Major.renderWar = function(){
+    const p = this.shadow.querySelector("#p-war");
+    // This assumes Colonel has processed 'war' data
+    const w = this.data.war || {}; 
+    const mem = this.data.aiMemory.war || {};
     
-    // Filters
-    if(this.filterHideHosp) list = list.filter(e => !(e.status||"").toLowerCase().includes("hospital"));
-    if(this.filterHideTravel) list = list.filter(e => !(e.status||"").toLowerCase().includes("travel"));
+    // Attempt to find active ranked war data
+    let activeWar = null;
+    if(w.wars) {
+        // Just grab first active war for UI simplicity
+        activeWar = Object.values(w.wars)[0]; 
+    }
     
-    // Sort: Online > Score
-    list.sort((a,b) => {
-        if(a.online !== b.online) return b.online ? 1 : -1;
-        return (b.score || 0) - (a.score || 0);
-    });
+    if(!activeWar){
+        p.innerHTML = `
+            <div class="card">
+                <div class="card-head">CONFLICT STATUS</div>
+                <div style="text-align:center; padding:20px; color:var(--mute);">NO ACTIVE CONFLICT DETECTED</div>
+            </div>
+        `;
+        return;
+    }
 
-    const rows = list.map(e => {
-        const status = (e.status || "").toLowerCase();
-        let sColor = "#666";
-        if(status.includes("hospital")) sColor = "var(--danger)";
-        else if(status.includes("travel")) sColor = "var(--primary)";
-        else if(e.online) sColor = "var(--success)";
+    // War Data exists
+    p.innerHTML = `
+        <div class="card prio">
+            <div class="card-head">ACTIVE ENGAGEMENT</div>
+            <div style="color:var(--danger); font-weight:bold; font-size:14px; margin-bottom:5px;">
+                VS: ${this.data.ai?.topTargets[0]?.name || "UNKNOWN FACTION"} 
+                </div>
+            <div class="grid-2">
+                <div><span class="stat-sm">SCORE:</span> <b class="text-ok">US</b></div>
+                <div style="text-align:right"><span class="stat-sm">SCORE:</span> <b class="text-r">THEM</b></div>
+            </div>
+            <div style="height:4px; background:#222; margin-top:5px; display:flex;">
+                <div style="width:50%; background:var(--ok);"></div>
+                <div style="width:50%; background:var(--danger);"></div>
+            </div>
+        </div>
 
+        <div class="card">
+            <div class="card-head">AGGRESSION INDEX</div>
+            <div id="wnx-war-chart" style="height:120px;"></div>
+        </div>
+    `;
+};
+
+Major.renderChain = function(){
+    const p = this.shadow.querySelector("#p-chain");
+    const c = this.data.chain || {};
+    
+    p.innerHTML = `
+        <div class="card">
+            <div class="card-head">MOMENTUM</div>
+            <div id="wnx-chain-chart" style="height:140px;"></div>
+        </div>
+        
+        <div class="card">
+            <div class="card-head">ALERTS</div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
+                 <span>ENABLED</span>
+                 <b class="${this.alerts.enabled?'text-ok':'text-r'}" style="cursor:pointer;" id="act-tog">${this.alerts.enabled?'ON':'OFF'}</b>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
+                 <span>FLASH SCREEN</span>
+                 <b class="${this.alerts.flash?'text-ok':'text-r'}" style="cursor:pointer;" id="act-fls">${this.alerts.flash?'YES':'NO'}</b>
+            </div>
+            <div style="margin-top:10px;">
+                <div class="stat-sm">THRESHOLD: ${this.alerts.threshold}s</div>
+                <input type="range" min="30" max="180" value="${this.alerts.threshold}" id="act-sld" style="width:100%; accent-color:var(--primary);">
+            </div>
+        </div>
+    `;
+    
+    p.querySelector("#act-tog").onclick = () => { this.alerts.enabled = !this.alerts.enabled; this.saveSettings(); this.renderChain(); };
+    p.querySelector("#act-fls").onclick = () => { this.alerts.flash = !this.alerts.flash; this.saveSettings(); this.renderChain(); };
+    p.querySelector("#act-sld").oninput = (e) => { this.alerts.threshold = e.target.value; this.saveSettings(); this.renderChain(); };
+};
+
+Major.renderTargets = function(){
+    const p = this.shadow.querySelector("#p-targets");
+    const sub = this.targetSubTab; // 'personal', 'war', 'shared'
+    const list = this.data.targets[sub] || [];
+    
+    // Sort logic
+    if(sub === 'war'){
+        // Already sorted by Colonel (Score)
+    } else {
+        // Sort others by status
+        list.sort((a,b) => {
+             const sa = (a.status||"").toLowerCase();
+             const sb = (b.status||"").toLowerCase();
+             if(sa.includes("hosp") && !sb.includes("hosp")) return 1;
+             if(!sa.includes("hosp") && sb.includes("hosp")) return -1;
+             return 0;
+        });
+    }
+
+    const rows = list.map(t => {
+        const st = (t.status||"").toLowerCase();
+        let col = "#fff";
+        if(st.includes("hosp")) col = "var(--danger)";
+        if(st.includes("trav")) col = "var(--primary)";
+        if(t.online) col = "var(--ok)";
+        
         return `
             <tr>
-                <td style="color:${e.online ? 'var(--success)' : '#444'}; font-size:14px;">●</td>
                 <td>
-                    <div style="font-weight:bold; color:#eee;">${e.name}</div>
-                    <div style="font-size:9px; color:#888;">Lv${e.level} • ${status}</div>
+                    <div style="color:${col}; font-weight:bold;">${t.name}</div>
+                    <div style="font-size:9px; color:var(--mute);">[Lv${t.level}] ${t.status.substring(0,15)}</div>
                 </td>
                 <td style="text-align:right;">
-                    <a href="https://www.torn.com/loader.php?sid=attack&user2ID=${e.id}" target="_blank" class="btn-atk">ATK</a>
+                    ${t.score ? `<span class="text-y" style="font-size:9px; margin-right:5px;">${t.score}</span>` : ''}
+                    <a href="https://www.torn.com/loader.php?sid=attack&user2ID=${t.id}" target="_blank" class="btn-atk">ATK</a>
                 </td>
             </tr>
         `;
@@ -552,138 +518,67 @@ Major.renderEnemy = function(){
 
     p.innerHTML = `
         <div style="display:flex; gap:5px; margin-bottom:10px;">
-            <button class="btn-act ${this.filterHideHosp?'active':''}" id="f-hosp">Hide Hosp</button>
-            <button class="btn-act ${this.filterHideTravel?'active':''}" id="f-trav">Hide Trav</button>
+            <div class="btn-tab ${sub==='personal'?'active':''}" id="t-p">PERS</div>
+            <div class="btn-tab ${sub==='war'?'active':''}" id="t-w">WAR(AI)</div>
+            <div class="btn-tab ${sub==='shared'?'active':''}" id="t-s">SHARE</div>
         </div>
-        <div class="hud-card" style="padding:0;">
+        
+        <div class="card" style="padding:0;">
             <table>
-                <thead><tr><th width="10"></th><th>TARGET</th><th style="text-align:right">ACTION</th></tr></thead>
-                <tbody>${rows || '<tr><td colspan="3" style="padding:20px; text-align:center;">NO TARGETS FOUND</td></tr>'}</tbody>
+                <thead><tr><th>TARGET</th><th style="text-align:right">ACTION</th></tr></thead>
+                <tbody>${list.length ? rows : '<tr><td colspan="2" style="text-align:center;padding:15px;color:#555;">NO DATA</td></tr>'}</tbody>
             </table>
         </div>
     `;
 
-    p.querySelector("#f-hosp").onclick = () => { this.filterHideHosp = !this.filterHideHosp; this.renderEnemy(); };
-    p.querySelector("#f-trav").onclick = () => { this.filterHideTravel = !this.filterHideTravel; this.renderEnemy(); };
+    p.querySelector("#t-p").onclick = () => { this.targetSubTab='personal'; this.renderTargets(); };
+    p.querySelector("#t-w").onclick = () => { this.targetSubTab='war'; this.renderTargets(); };
+    p.querySelector("#t-s").onclick = () => { this.targetSubTab='shared'; this.renderTargets(); };
 };
 
-/* TAB: CHAIN (Graph + Alert Config) */
-Major.renderChain = function(){
-    const p = this.shadow.querySelector("#p-chain");
-    const c = this.data.chain || {};
+Major.renderFaction = function(){
+    const p = this.shadow.querySelector("#p-faction");
+    const list = this.data.faction || [];
     
-    p.innerHTML = `
-        <div class="hud-card alert">
-            <div class="hud-header">ALERT CONFIG</div>
-            <div class="flex-row" style="justify-content:space-between; margin-bottom:8px;">
-                <span>ENABLE ALERTS</span>
-                <button class="btn-act ${this.alerts.enabled?'active':''}" id="c-tog">ON/OFF</button>
-            </div>
-            <div class="flex-row" style="justify-content:space-between; margin-bottom:8px;">
-                <span>FLASH SCREEN</span>
-                <button class="btn-act ${this.alerts.flash?'active':''}" id="c-fls">VISUAL</button>
-            </div>
-            <div class="flex-row" style="justify-content:space-between; margin-bottom:8px;">
-                <span>AUDIO BEEP</span>
-                <button class="btn-act ${this.alerts.audio?'active':''}" id="c-aud">AUDIO</button>
-            </div>
-            <div style="margin-top:10px;">
-                <div class="sub-stat">PANIC THRESHOLD: <span class="text-c">${this.alerts.threshold}s</span></div>
-                <input type="range" min="30" max="180" value="${this.alerts.threshold}" id="c-sld" style="width:100%; accent-color:var(--primary);">
-            </div>
-        </div>
-
-        <div class="hud-card">
-            <div class="hud-header">MOMENTUM GRAPH</div>
-            <div id="wnx-chain-graph" style="height:150px;"></div>
-        </div>
-    `;
-
-    // Bindings
-    p.querySelector("#c-tog").onclick = () => { this.alerts.enabled = !this.alerts.enabled; this.saveSettings(); this.renderChain(); };
-    p.querySelector("#c-fls").onclick = () => { this.alerts.flash = !this.alerts.flash; this.saveSettings(); this.renderChain(); };
-    p.querySelector("#c-aud").onclick = () => { this.alerts.audio = !this.alerts.audio; this.saveSettings(); this.renderChain(); };
-    p.querySelector("#c-sld").oninput = (e) => { this.alerts.threshold = parseInt(e.target.value); this.saveSettings(); p.querySelector(".text-c").textContent = this.alerts.threshold + "s"; };
-};
-
-/* TAB: TARGETS (Simplified List) */
-Major.renderTargets = function(){
-    const p = this.shadow.querySelector("#p-targets");
-    const list = this.data.targets[this.targetSubTab] || [];
+    list.sort((a,b) => (b.online?1:0) - (a.online?1:0));
     
-    const rows = list.map(t => `
+    const rows = list.map(m => `
         <tr>
-            <td><b class="text-c">${t.name}</b> <span style="font-size:9px;color:#666">[${t.level}]</span></td>
-            <td>${t.status}</td>
-            <td style="text-align:right;">
-                <a href="https://www.torn.com/loader.php?sid=attack&user2ID=${t.id}" target="_blank" class="btn-atk">ATK</a>
-            </td>
+            <td><span style="color:${m.online?'var(--ok)':'#555'}">●</span> ${m.name}</td>
+            <td style="text-align:right">${m.status}</td>
         </tr>
     `).join("");
 
     p.innerHTML = `
-        <div style="display:flex; gap:5px; margin-bottom:10px;">
-            <button class="btn-act ${this.targetSubTab==='personal'?'active':''}" id="t-per">Personal</button>
-            <button class="btn-act ${this.targetSubTab==='war'?'active':''}" id="t-war">War</button>
-            <button class="btn-act ${this.targetSubTab==='shared'?'active':''}" id="t-shr">Shared</button>
-        </div>
-        <div class="hud-card" style="padding:0;">
+        <div class="card" style="padding:0;">
+            <div class="card-head" style="padding:10px;">ROSTER (${list.length})</div>
             <table>
-                <thead><tr><th>NAME</th><th>STATUS</th><th style="text-align:right">ATK</th></tr></thead>
-                <tbody>${list.length ? rows : '<tr><td colspan="3" style="padding:10px;text-align:center;">EMPTY</td></tr>'}</tbody>
+                <thead><tr><th>NAME</th><th style="text-align:right">STATUS</th></tr></thead>
+                <tbody>${rows}</tbody>
             </table>
         </div>
     `;
-    
-    p.querySelector("#t-per").onclick = () => { this.targetSubTab = 'personal'; this.renderTargets(); };
-    p.querySelector("#t-war").onclick = () => { this.targetSubTab = 'war'; this.renderTargets(); };
-    p.querySelector("#t-shr").onclick = () => { this.targetSubTab = 'shared'; this.renderTargets(); };
 };
 
-/* TAB: SETTINGS */
 Major.renderSettings = function(){
     const p = this.shadow.querySelector("#p-settings");
     p.innerHTML = `
-        <div class="hud-card">
-            <div class="hud-header">WINDOW SETTINGS</div>
-            <button class="btn-act" style="width:100%; margin-bottom:5px;" id="s-det">
-                ${this.detached ? 'DOCK TO LEFT' : 'DETACH WINDOW'}
-            </button>
-            <button class="btn-act" style="width:100%; margin-bottom:5px;" id="s-side">
-                SIDE: ${this.attachedSide.toUpperCase()}
-            </button>
-            <button class="btn-act" style="width:100%;" id="s-scl">
-                SCALE: ${this.dataScale.toFixed(1)}x
-            </button>
+        <div class="card">
+            <div class="card-head">WINDOW</div>
+            <button class="btn-tab" style="width:100%; margin-bottom:5px;" id="s-det">${this.detached?'DOCK':'DETACH'}</button>
+            <button class="btn-tab" style="width:100%; margin-bottom:5px;" id="s-side">SIDE: ${this.attachedSide.toUpperCase()}</button>
+            <button class="btn-tab" style="width:100%;" id="s-sc">SCALE: ${this.dataScale.toFixed(1)}</button>
         </div>
-        <div class="hud-card alert">
-            <div class="hud-header">DATA RESET</div>
-            <button class="btn-act danger" style="width:100%;" id="s-rst">PURGE LOCAL CACHE</button>
+        <div class="card">
+             <div class="card-head">DANGER ZONE</div>
+             <button class="btn-tab" style="width:100%; border-color:var(--danger); color:var(--danger);" id="s-wipe">WIPE MEMORY</button>
         </div>
     `;
     
-    p.querySelector("#s-det").onclick = () => {
-        this.detached = !this.detached;
-        this.applyWindowSettings();
-        this.saveSettings();
-        this.renderSettings();
-    };
-    p.querySelector("#s-side").onclick = () => {
-        this.attachedSide = this.attachedSide === "left" ? "right" : "left";
-        this.applyWindowSettings();
-        this.saveSettings();
-        this.renderSettings();
-    };
-    p.querySelector("#s-scl").onclick = () => {
-        this.dataScale = (this.dataScale >= 1.5) ? 0.8 : this.dataScale + 0.1;
-        this.applyWindowSettings();
-        this.saveSettings();
-        this.renderSettings();
-    };
-    p.querySelector("#s-rst").onclick = () => {
-        localStorage.removeItem("WN_AI_HISTORY");
-        this.nexus.log("Cache Purged");
-    };
+    p.querySelector("#s-det").onclick = () => { this.detached=!this.detached; this.applyWindowSettings(); this.saveSettings(); this.renderSettings(); };
+    p.querySelector("#s-side").onclick = () => { this.attachedSide=this.attachedSide==='left'?'right':'left'; this.applyWindowSettings(); this.saveSettings(); this.renderSettings(); };
+    p.querySelector("#s-sc").onclick = () => { this.dataScale = this.dataScale>=1.5 ? 0.8 : this.dataScale+0.1; this.applyWindowSettings(); this.saveSettings(); this.renderSettings(); };
+    p.querySelector("#s-wipe").onclick = () => { localStorage.removeItem("WN_AI_HISTORY"); this.nexus.log("WIPED"); };
 };
 
 Major.applyWindowSettings = function(){
@@ -692,8 +587,8 @@ Major.applyWindowSettings = function(){
     
     if(this.detached){
         this.drawer.style.position = "absolute";
-        this.drawer.style.height = "600px";
-        this.drawer.style.width = "400px";
+        this.drawer.style.height = "500px";
+        this.drawer.style.width = "350px";
         this.drawer.style.top = "50px";
         this.drawer.style.left = "50px";
         this.drawer.style.border = "1px solid var(--primary)";
@@ -710,31 +605,31 @@ Major.applyWindowSettings = function(){
     }
 };
 
-/* CHARTS */
-Major.renderChainGraph = function(){
+/* BLOCK: CHARTS */
+
+Major.drawChart = function(containerId, data, color, type='line'){
     if(!window.Chart) return;
-    const container = this.shadow.querySelector("#wnx-chain-graph");
-    if(!container || container.querySelector("canvas")) return;
+    const container = this.shadow.querySelector(containerId);
+    if(!container) return;
+    
+    // Cleanup existing chart to prevent leak/glitch
+    if(this.chartInstances[containerId]) {
+        this.chartInstances[containerId].destroy();
+        delete this.chartInstances[containerId];
+    }
     
     container.innerHTML = "<canvas></canvas>";
     const ctx = container.querySelector("canvas").getContext("2d");
-    const pace = (this.data.aiMemory.chain || {}).pace || [];
     
-    if(pace.length < 2) {
-        ctx.fillStyle = "#555"; ctx.font = "10px monospace";
-        ctx.fillText("INSUFFICIENT DATA", 10, 20); return;
-    }
-    
-    new Chart(ctx, {
-        type: 'line',
+    this.chartInstances[containerId] = new Chart(ctx, {
+        type: type,
         data: {
-            labels: pace.map(p => new Date(p.ts).toLocaleTimeString([], {minute:'2-digit'})),
+            labels: data.map((_, i) => i),
             datasets: [{
-                label: 'Hits',
-                data: pace.map(p => p.hits),
-                borderColor: '#0ff',
-                backgroundColor: 'rgba(0, 255, 255, 0.1)',
-                borderWidth: 1,
+                data: data,
+                borderColor: color,
+                backgroundColor: color.replace(')', ',0.1)').replace('rgb', 'rgba'),
+                borderWidth: 1.5,
                 pointRadius: 0,
                 fill: true,
                 tension: 0.3
@@ -744,16 +639,22 @@ Major.renderChainGraph = function(){
             responsive: true,
             maintainAspectRatio: false,
             plugins: { legend: { display: false } },
-            scales: {
-                x: { display: false },
-                y: { grid: { color: '#222' }, ticks: { color: '#666', font: {size: 9} } }
-            },
+            scales: { x: { display: false }, y: { display: false } },
             animation: false
         }
     });
 };
 
-/* REGISTRATION */
+Major.renderChainChart = function(){
+    const pace = (this.data.aiMemory.chain?.pace || []).map(p => p.hits);
+    if(pace.length) this.drawChart("#wnx-chain-chart", pace, "rgb(0, 255, 255)");
+};
+
+Major.renderWarChart = function(){
+    const agg = (this.data.aiMemory.war?.aggression || []).map(a => a.status.includes('active')?2:1);
+    if(agg.length) this.drawChart("#wnx-war-chart", agg, "rgb(255, 0, 60)", 'bar');
+};
+
 window.__NEXUS_OFFICERS = window.__NEXUS_OFFICERS || [];
 window.__NEXUS_OFFICERS.push({ name: "Major", module: Major });
 
