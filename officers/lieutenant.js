@@ -1,6 +1,6 @@
-// lieutenant.js — Patched with Drawer-Triggered Polling & Serialized API Queue
+// lieutenant.js
 ////////////////////////////////////////////////////////////
-// LIEUTENANT — INTEL ACQUISITION ENGINE (FULL PATCH)
+// LIEUTENANT — INTEL ACQUISITION ENGINE 
 //
 // NEW FEATURES:
 //   - Drawer-triggered full intel load (ONCE per 60 sec)
@@ -12,6 +12,7 @@
 //   - Compatible with Colonel, Major, Sergeant
 ////////////////////////////////////////////////////////////
 
+
 (function(){
 "use strict";
 
@@ -22,7 +23,7 @@ function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
 
 async function serialGet(fn){
     const result = await fn();
-    await sleep(450); // ensures >400ms for WAR_NEXUS limiter
+    await sleep(450); // ensures >400ms before next API call
     return result;
 }
 
@@ -74,7 +75,7 @@ const Lieutenant = {
     },
 
     /* ------------------------------------------------------------ */
-    /* SERIALIZED FULL INTEL PULL (NO ENEMY DATA DURING WAR)        */
+    /* SERIALIZED FULL INTEL PULL                                  */
     /* ------------------------------------------------------------ */
     async pullFullIntel(){
         const api = this.nexus.intel;
@@ -113,17 +114,18 @@ const Lieutenant = {
                 await serialGet(() => api.requestV2(`/faction/${factionId}/chain`));
         }
 
-        const warActive = Boolean(intel.faction_wars?.wars &&
-             Object.keys(intel.faction_wars.wars).length > 0);
+        /* PATCH: Safe access to wars */
+        const warsObj = intel.faction_wars?.wars ?? {};
+        const warActive = Object.keys(warsObj).length > 0;
 
         /* ------------------------------------------------------------ */
-        /* ENEMY DATA (OPTION D) — SKIPPED DURING WAR                    */
+        /* ENEMY DATA — SKIPPED DURING WAR                              */
         /* ------------------------------------------------------------ */
-        if (!warActive && factionId && intel.faction_wars?.wars){
-            intel.enemies = [];
+        intel.enemies = [];
 
-            for (const wid in intel.faction_wars.wars){
-                const war = intel.faction_wars.wars[wid];
+        if (!warActive && factionId && warsObj){
+            for (const wid in warsObj){
+                const war = warsObj[wid];
                 const enemyId = war.enemy_faction || war.opponent || null;
                 if (!enemyId) continue;
 
@@ -138,8 +140,6 @@ const Lieutenant = {
                     members: members?.members || {}
                 });
             }
-        } else {
-            intel.enemies = null;
         }
 
         /* ------------------------------------------------------------ */
@@ -149,7 +149,7 @@ const Lieutenant = {
     },
 
     /* ------------------------------------------------------------ */
-    /* RAW_INTEL NORMALIZATION (matches original structure exactly) */
+    /* RAW_INTEL NORMALIZATION                                      */
     /* ------------------------------------------------------------ */
     composeRawIntel(intel){
         const c = intel.chain?.chain || intel.chain || {};
@@ -159,7 +159,7 @@ const Lieutenant = {
         const enemiesOut = [];
         const flatEnemyMembers = {};
 
-        if (intel.enemies){
+        if (Array.isArray(intel.enemies)){
             for (const ef of intel.enemies){
                 const enemyId = ef.id;
                 const members = ef.members || {};
@@ -185,6 +185,8 @@ const Lieutenant = {
             }
         }
 
+        const timeout = c.timeout ?? c.timeLeft ?? 0;
+
         return {
             timestamp: Date.now(),
 
@@ -203,7 +205,7 @@ const Lieutenant = {
 
             chain: {
                 hits: c.hits || 0,
-                timeout: c.timeout || 0,
+                timeout,
                 cooldown: c.cooldown || 0,
                 modifiers: c.modifiers || {},
                 full: c
@@ -239,20 +241,21 @@ const Lieutenant = {
                 const hits = chain?.chain?.hits || 0;
                 const timeout = chain?.chain?.timeout || 0;
 
+                /* PATCH: Ensure fullIntelCache exists before modifying */
                 if (this.fullIntelCache){
                     this.fullIntelCache.chain = {
-                        hits, timeout, full: chain.chain
+                        hits,
+                        timeout,
+                        full: chain.chain
                     };
+                    this.nexus.events.emit("RAW_INTEL", this.fullIntelCache);
                 }
-
-                /* ALSO push chain-only Sitrep updates */
-                this.nexus.events.emit("RAW_INTEL", this.fullIntelCache);
 
                 /* adjust timer */
                 if (hits > 0){
-                    this.restartChainTimer(7000);   // active chain
+                    this.restartChainTimer(7000);
                 } else {
-                    this.restartChainTimer(180000); // 3 minutes
+                    this.restartChainTimer(180000);
                 }
 
             } catch(e){
@@ -272,16 +275,16 @@ const Lieutenant = {
     },
 
     /* ------------------------------------------------------------ */
-    /* BACKGROUND ENEMY POLLING (OPTION D)                          */
+    /* BACKGROUND ENEMY POLLING                                     */
     /* ------------------------------------------------------------ */
     startEnemyPolling(){
         const api = this.nexus.intel;
 
         const poll = async () => {
             try {
-                /* Need faction wars first */
+                /* PATCH: Guard against missing cache or missing faction */
                 const factionId = this.fullIntelCache?.faction?.id;
-                if (!factionId){
+                if (!this.fullIntelCache || !factionId){
                     this.restartEnemyTimer(180000);
                     return;
                 }
@@ -290,18 +293,18 @@ const Lieutenant = {
                     api.requestV2(`/faction/${factionId}/wars`)
                 );
 
-                const warActive = wars?.wars && Object.keys(wars.wars).length > 0;
+                const warsObj = wars?.wars ?? {};
+                const warActive = Object.keys(warsObj).length > 0;
 
                 const enemiesOut = [];
                 const flat = {};
 
-                if (wars?.wars){
-                    for (const wid in wars.wars){
-                        const war = wars.wars[wid];
+                if (warsObj){
+                    for (const wid in warsObj){
+                        const war = warsObj[wid];
                         const enemyId = war.enemy_faction || war.opponent;
                         if (!enemyId) continue;
 
-                        /* Option D */
                         const basic = await serialGet(() =>
                             api.requestV2(`/faction/${enemyId}/basic`)
                         );
@@ -330,14 +333,13 @@ const Lieutenant = {
                     }
                 }
 
-                /* update cache */
+                /* PATCH: Ensure cache exists before writing */
                 if (this.fullIntelCache){
                     this.fullIntelCache.enemies = enemiesOut;
                     this.fullIntelCache.enemyMembersFlat = flat;
-                }
 
-                /* push SITREP refresh */
-                this.nexus.events.emit("RAW_INTEL", this.fullIntelCache);
+                    this.nexus.events.emit("RAW_INTEL", this.fullIntelCache);
+                }
 
                 /* adjust timer */
                 if (warActive){
