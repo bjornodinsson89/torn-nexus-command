@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         WAR_GENERAL_NEXUS
-// @version      1.1
-// @description  Torn War helper
+// @name         WAR_GENERAL_NEXUS_v7.3
+// @version      7.3
+// @description  Torn War Nexus – Core Command Engine (General v7.3)
 // @author       BjornOdinsson89
 // @match        https://www.torn.com/*
 // @match        https://www.torn.com/loader.php*
@@ -10,170 +10,280 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_addStyle
+// @connect      raw.githubusercontent.com
+// @connect      githubusercontent.com
+// @connect      gstatic.com
+// @connect      firebaseio.com
+// @connect      googleapis.com
+// @require      https://raw.githubusercontent.com/Bjornodinsson89/torn-nexus-command/main/officers/major.js
 // ==/UserScript==
 
-(function() {
-    'use strict';
+/**********************************************************
+ * WAR GENERAL — CORE ENGINE (v7.3)
+ **********************************************************/
+(function(){
 
-    let _secureKey = null;
-    const _roster = {};
-    const _events = {};
-    const Crypto = {
-        lock: t => btoa(t.split('').reverse().join('')),
-        unlock: t => atob(t).split('').reverse().join('')
-    };
-
-    const stored = GM_getValue("WAR_API_KEY");
-    if (stored) _secureKey = Crypto.unlock(stored);
-
-    function performSecureFetch(selection) {
-        return new Promise((resolve, reject) => {
-            if (!_secureKey) return reject("NO_KEY");
-            const url = `https://api.torn.com/user/?selections=${selection}&key=${_secureKey}`;
-            GM_xmlhttpRequest({
-                method: "GET",
-                url,
-                onload: r => {
-                    if (r.status !== 200) return reject("HTTP");
-                    try {
-                        const d = JSON.parse(r.responseText);
-                        if (d.error) reject("API_ERR");
-                        else resolve(d);
-                    } catch(e) { reject("PARSE"); }
-                },
-                onerror: () => reject("NET")
-            });
-        });
-    }
-
-    function loadPlugin(url) {
-    return new Promise((resolve, reject) => {
-        GM_xmlhttpRequest({
-            method: "GET",
-            url,
-            onload: r => {
-                try {
-                    const s = document.createElement("script");
-                    s.textContent = r.responseText;
-                    document.documentElement.appendChild(s);
-                    s.remove();
-                    resolve();
-                } catch(e) {
-                    reject(e);
-                }
-            },
-            onerror: reject
-        });
-    });
+/**********************************************************
+ * DEBUG WINDOW
+ **********************************************************/
+const DEBUG_STYLE = `
+#nexus-debug-box {
+    position: fixed;
+    bottom: 0;
+    right: 0;
+    width: 340px;
+    height: 180px;
+    background: #000;
+    border: 1px solid #0ff;
+    font-family: monospace;
+    font-size: 11px;
+    color: #0ff;
+    overflow-y: auto;
+    padding: 4px;
+    z-index: 2147483646;
 }
-    
-    window.WAR_GENERAL = {
-        register(name, module) {
-            _roster[name] = module;
-            if (module.init) module.init(this);
-        },
-        loadPlugin,
-        signals: {
-            listen(ev, fn) {
-                if (!_events[ev]) _events[ev] = [];
-                _events[ev].push(fn);
-                return () => _events[ev] = _events[ev].filter(f => f !== fn);
-            },
-            dispatch(ev, data) {
-                if (_events[ev]) _events[ev].forEach(f => f(data));
-            }
-        },
-        intel: {
-            request(selectionString) {
-                return performSecureFetch(selectionString);
-            },
-            setCredentials(rawKey) {
-                _secureKey = rawKey;
-                GM_setValue("WAR_API_KEY", Crypto.lock(rawKey));
-            },
-            hasCredentials() {
-                return !!_secureKey;
-            }
-        }
-    };
+`;
+GM_addStyle(DEBUG_STYLE);
 
-    function deployPlugins() {
-        const PLUGIN_URLS = [
-            "https://raw.githubusercontent.com/Bjornodinsson89/torn-nexus-command/main/officers/lieutenant.js",
-            "https://raw.githubusercontent.com/Bjornodinsson89/torn-nexus-command/main/officers/colonel.js",
-            "https://raw.githubusercontent.com/Bjornodinsson89/torn-nexus-command/main/officers/sergeant.js",
-            "https://raw.githubusercontent.com/Bjornodinsson89/torn-nexus-command/main/officers/major.js"
-        ];
-        PLUGIN_URLS.forEach(u => WAR_GENERAL.loadPlugin(u));
+const debugBox = document.createElement("div");
+debugBox.id = "nexus-debug-box";
+debugBox.innerHTML = "[DEBUG WINDOW ACTIVE]<br>Debug system initialized...";
+document.body.appendChild(debugBox);
+
+function WARDBG(msg){
+    const t = new Date().toLocaleTimeString();
+    debugBox.innerHTML += `<br>[${t}] ${msg}`;
+    debugBox.scrollTop = debugBox.scrollHeight;
+}
+
+window.WARDBG = WARDBG;
+WARDBG("INSANE DEBUG MODE ENABLED");
+
+/**********************************************************
+ * API VAULT (Encrypted Local Storage)
+ **********************************************************/
+let SECURE_KEY = null;
+
+const Crypto = {
+    lock(t){ return btoa(t.split("").reverse().join("")); },
+    unlock(t){ return atob(t).split("").reverse().join(""); }
+};
+
+(function loadAPIKey(){
+    const stored = GM_getValue("WAR_API_KEY");
+    if (stored){
+        SECURE_KEY = Crypto.unlock(stored);
+        WARDBG("API KEY FOUND — Booting Nexus...");
+    } else {
+        WARDBG("NO API KEY — Triggering popup...");
     }
+})();
 
-    const popupHtml = `
-        <div id="nexus-api-overlay"></div>
-        <div id="nexus-api-modal">
-            <div id="nexus-api-title">WAR ROOM // AUTHORIZATION</div>
-            <div id="nexus-scrollbox">
-                <div id="nexus-scrolltext">
-                    <b>OPERATOR:</b><br>
-                    You stand before the encrypted gate of the WAR ROOM — a classified command center operating beyond Torn’s standard battlefield interfaces.<br><br>
-                    <b>THE TORN API:</b><br>
-                    By entering your Torn API key, you authorize the General to retrieve tactical intelligence directly from HQ. This key grants <u>read-only</u> access to your status, faction data, chain metrics, and war conditions.<br><br>
-                    <b>FIREBASE DATABASE:</b><br>
-                    The Sergeant communicates with Firebase for faction coordination. Your API key is never sent to Firebase.<br><br>
-                    Proceed and unlock the War Room.
-                </div>
+/**********************************************************
+ * API POPUP (FULL DISCLAIMER – SCROLL WINDOW)
+ **********************************************************/
+function openKeyPopup(){
+    const html = `
+    <div id="nexus-api-overlay"></div>
+    <div id="nexus-api-modal">
+        <div id="nexus-api-title">WAR ROOM // AUTHORIZATION</div>
+
+        <div id="nexus-api-scroll">
+            <div id="nexus-api-text">
+<b>OPERATOR:</b><br>
+You are accessing the WAR ROOM — the encrypted tactical command system for Torn War Nexus.<br><br>
+
+<b>ABOUT YOUR API KEY:</b><br>
+Your Torn API key is used ONLY to read tactical intel permitted by Torn’s official read-only endpoints:
+<ul>
+<li>Status</li>
+<li>Chain</li>
+<li>Faction</li>
+<li>War data</li>
+</ul>
+
+The key:
+<ul>
+<li>is encrypted locally (never sent externally)</li>
+<li>is never uploaded to Firebase</li>
+<li>is never transmitted to any server beyond Torn’s official API</li>
+</ul>
+
+<b>ABOUT FIREBASE:</b><br>
+Firebase is used ONLY for optional shared target lists and faction coordination.  
+Your personal Torn data is NEVER written to Firebase.  
+Only the faction’s shared target list + anonymous analytics are stored.<br><br>
+
+<b>Proceed only if you fully understand the access being granted.</b>
             </div>
-            <input id="nexus-api-input" placeholder="Enter Torn API Key">
-            <button id="nexus-api-save">Authorize</button>
         </div>
+
+        <input id="nexus-api-input" placeholder="Enter Torn API Key">
+        <button id="nexus-api-save">Authorize</button>
+    </div>
     `;
 
-    const popupStyle = `
-        #nexus-api-overlay {
-            position: fixed; top:0; left:0; width:100%; height:100%;
-            background: rgba(0,0,0,0.75); backdrop-filter:blur(4px);
-            z-index: 99999997; display:none;
-        }
-        #nexus-api-modal {
-            position: fixed; top:50%; left:50%; transform:translate(-50%, -50%);
-            width: 315px; padding:18px; background:#050505;
-            border:2px solid #00f3ff; border-right: 2px solid #00f3ff;
-            box-shadow:0 0 25px rgba(0,243,255,0.4);
-            z-index:99999998; display:none; color:#00f3ff;
-            font-family: 'Courier New', monospace;
-        }
-        #nexus-scrollbox {
-            width:100%; height:160px; overflow-y:auto; padding:8px;
-            background:#000; border:1px solid #00f3ff; margin-bottom:12px;
-        }
-        #nexus-api-input {
-            width:100%; padding:7px; background:#000;
-            border:1px solid #00f3ff; color:#00f3ff; margin-bottom:10px;
-        }
-        #nexus-api-save {
-            width:100%; padding:9px; background:#00f3ff; color:#000;
-            font-weight:bold; cursor:pointer; border:none;
-        }
-`;
-    GM_addStyle(popupStyle);
-
-    function openPopup() {
-        const wrap = document.createElement("div");
-        wrap.innerHTML = popupHtml;
-        document.body.appendChild(wrap);
-        document.getElementById("nexus-api-overlay").style.display = "block";
-        document.getElementById("nexus-api-modal").style.display = "block";
-        document.getElementById("nexus-api-save").onclick = () => {
-            const val = document.getElementById("nexus-api-input").value.trim();
-            if (val) {
-                WAR_GENERAL.intel.setCredentials(val);
-                document.getElementById("nexus-api-overlay").remove();
-                document.getElementById("nexus-api-modal").remove();
-                deployPlugins();
-            }
-        };
+    const css = `
+    #nexus-api-overlay {
+        position: fixed; top:0; left:0; width:100%; height:100%;
+        background: rgba(0,0,0,0.75); z-index:99999998;
     }
+    #nexus-api-modal {
+        position: fixed; top:50%; left:50%; transform:translate(-50%, -50%);
+        width: 320px; background:#000; color:#0ff;
+        border:2px solid #0ff; padding:16px;
+        font-family: monospace; z-index:99999999;
+    }
+    #nexus-api-title {
+        text-align:center; font-size:16px; margin-bottom:10px;
+    }
+    #nexus-api-scroll {
+        background:#001014; border:1px solid #0ff;
+        height:160px; overflow-y:auto; padding:6px; margin-bottom:10px;
+    }
+    #nexus-api-input {
+        width:100%; padding:6px; background:#000;
+        color:#0ff; border:1px solid #0ff; margin-bottom:10px;
+    }
+    #nexus-api-save {
+        width:100%; padding:8px; background:#0ff; color:#000;
+        font-weight:bold; cursor:pointer;
+    }
+    `;
 
-    if (!_secureKey) openPopup();
-    else deployPlugins();
+    GM_addStyle(css);
+
+    const wrap = document.createElement("div");
+    wrap.innerHTML = html;
+    document.body.appendChild(wrap);
+
+    document.querySelector("#nexus-api-save").onclick = ()=>{
+        const val = document.querySelector("#nexus-api-input").value.trim();
+        if (!val) return;
+
+        SECURE_KEY = val;
+        GM_setValue("WAR_API_KEY", Crypto.lock(val));
+        WARDBG("API key stored to vault.");
+
+        document.querySelector("#nexus-api-overlay").remove();
+        document.querySelector("#nexus-api-modal").remove();
+
+        bootNexus();
+    };
+}
+
+if (!SECURE_KEY){
+    WARDBG("Displaying command console API key popup...");
+    openKeyPopup();
+}
+
+/**********************************************************
+ * WAR GENERAL CORE OBJECT
+ **********************************************************/
+window.WAR_GENERAL = {
+    signals: {
+        listeners: {},
+        listen(event, fn){
+            if (!this.listeners[event]) this.listeners[event] = [];
+            this.listeners[event].push(fn);
+        },
+        dispatch(event, data){
+            const list = this.listeners[event];
+            if (list) list.forEach(fn => fn(data));
+        }
+    },
+
+    intel: {
+        hasCredentials(){
+            return !!SECURE_KEY;
+        },
+
+        request(selections){
+            return new Promise((resolve, reject)=>{
+                if (!SECURE_KEY){
+                    reject("NO_KEY");
+                    return;
+                }
+
+                const url = `https://api.torn.com/user/?selections=${selections}&key=${SECURE_KEY}`;
+                GM_xmlhttpRequest({
+                    method:"GET",
+                    url,
+                    onload: r=>{
+                        if (r.status !== 200){
+                            reject("HTTP_" + r.status);
+                            return;
+                        }
+                        try {
+                            const d = JSON.parse(r.responseText);
+                            if (d.error){
+                                reject("API_" + d.error.error);
+                            } else {
+                                resolve(d);
+                            }
+                        } catch(e){
+                            reject("PARSE");
+                        }
+                    },
+                    onerror: ()=>reject("NETWORK")
+                });
+            });
+        }
+    }
+};
+
+unsafeWindow.WAR_GENERAL = window.WAR_GENERAL;
+WARDBG("WAR_GENERAL bridged to page context.");
+
+/**********************************************************
+ * PLUGIN LOADER (CSP-SAFE)
+ **********************************************************/
+function loadOfficer(url){
+    const full = url + `?v=${Date.now()}`;
+    WARDBG("[PLUGIN] FETCH → " + full);
+
+    GM_xmlhttpRequest({
+        method: "GET",
+        url: full,
+        onload: r=>{
+            if (r.status !== 200){
+                WARDBG("[PLUGIN] HTTP ERROR " + r.status);
+                return;
+            }
+            WARDBG("[PLUGIN] FETCH OK → " + full);
+
+            try {
+                const exec = new Function("WAR_GENERAL", "WARDBG", r.responseText);
+                exec(window.WAR_GENERAL, window.WARDBG);
+                WARDBG("[PLUGIN] EXEC SUCCESS → " + full);
+            } catch(e){
+                WARDBG("[PLUGIN] EXEC ERROR: " + e);
+            }
+        },
+        onerror: ()=>WARDBG("[PLUGIN] NETWORK FAILURE → " + full)
+    });
+}
+
+/**********************************************************
+ * BOOT SEQUENCE — LOAD ALL OFFICERS
+ **********************************************************/
+function bootNexus(){
+    WARDBG("BOOT STARTED");
+
+    const officers = [
+        "https://raw.githubusercontent.com/Bjornodinsson89/torn-nexus-command/main/officers/lieutenant.js",
+        "https://raw.githubusercontent.com/Bjornodinsson89/torn-nexus-command/main/officers/colonel.js",
+        "https://raw.githubusercontent.com/Bjornodinsson89/torn-nexus-command/main/officers/sergeant.js"
+        // Major.js loads via @require above
+    ];
+
+    officers.forEach(loadOfficer);
+
+    WARDBG("BOOT COMPLETE — WAITING FOR OFFICERS TO REPORT");
+}
+
+if (SECURE_KEY){
+    bootNexus();
+}
 
 })();
