@@ -1,6 +1,4 @@
-// lieutenant.js — Adaptive Torn Intel Engine
-
-WAR_SANDBOX.register("Lieutenant", (function(){
+// lieutenant.js 
 
 ////////////////////////////////////////////////////////////
 // LIEUTENANT — INTEL ACQUISITION ENGINE
@@ -10,205 +8,112 @@ WAR_SANDBOX.register("Lieutenant", (function(){
 //  - Intel normalization
 //  - Chain momentum and collapse prediction
 //  - Feeding Colonel + Sergeant + Major with raw intel
+//  -(API MANAGER) ===
+//  - Decides *when* and *what* to fetch from Torn
 ////////////////////////////////////////////////////////////
 
-(function(){
+(function() {
+    "use strict";
 
-WARDBG("Lieutenant file loaded.");
+    const Lieutenant = {
+        general: null,
+        interval: null,
+        tick: 0,
+        chainActive: false,
+        chainTimeout: 0,
+        lastError: null,
 
-const Lieutenant = {
+        init(G) {
+            this.general = G;
 
-    general: null,
-    tick: 0,
-    mode: "idle",
-    lastFetch: 0,
-    errorCount: 0,
-    chainSamples: [],
+            // Heartbeat: every 1s, decide if we should fetch
+            this.interval = setInterval(() => {
+                if (!this.general.intel.hasCredentials()) return;
 
-    init(general){
-        this.general = general;
-        WARDBG("Lieutenant online (Adaptive Intel Engine)");
-        this.startHeartbeat();
-    },
+                this.tick++;
+                const rate = this.getRate(); // seconds between pulls
 
-    ////////////////////////////////////////////////////////
-    // HEARTBEAT ENGINE
-    ////////////////////////////////////////////////////////
+                if (this.tick >= rate) {
+                    this.tick = 0;
+                    this.requestIntel();
+                }
+            }, 1000);
+        },
 
-    startHeartbeat(){
-        setInterval(() => {
-            this.tick++;
+        // Dynamic polling based on chain status
+        getRate() {
+            if (this.chainActive && this.chainTimeout < 45) return 1;  // high tension
+            if (this.chainActive) return 3;                             // active chain
+            return 15;                                                  // peace
+        },
 
-            const delay = this.computeHeartbeatInterval();
-            if (this.tick >= delay){
-                this.tick = 0;
-                this.fetchIntel();
-            }
+        requestIntel() {
+            // Selections tuned for Colonel + Major:
+            // basic, profile, chain, faction, territory, war
+            this.general.intel.request("basic,profile,chain,faction,territory,war")
+                .then(d => {
+                    this.lastError = null;
+                    const intel = this.normalize(d);
+                    this.general.signals.dispatch("RAW_INTEL", intel);
+                })
+                .catch(err => {
+                    this.lastError = err;
+                    if (typeof WARDBG === "function") {
+                        WARDBG("Lieutenant INTEL ERROR: " + err);
+                    }
+                });
+        },
 
-        }, 1000);
-    },
+        normalize(d) {
+            const chain = d.chain || {};
+            const profile = d.profile || {};
+            const faction = d.faction || {};
+            const war = d.war || {};
 
-    computeHeartbeatInterval(){
-        if (!this.general.intel.hasCredentials()) return 30;
+            // Maintain internal chain status for rate logic
+            this.chainActive = (chain.current || 0) > 0;
+            this.chainTimeout = chain.timeout || 0;
 
-        let interval = 15;
-
-        const latest = this.chainSamples[this.chainSamples.length - 1];
-        const hits = latest?.hits || 0;
-        const timeout = latest?.timeLeft || 0;
-
-        if (hits > 0){
-            this.mode = "active";
-            interval = 5;
-
-            if (timeout <= 45){
-                this.mode = "critical";
-                interval = 1;
-            }
-        } else {
-            this.mode = "idle";
+            return {
+                user: {
+                    id: profile.player_id,
+                    name: profile.name,
+                    level: profile.level,
+                    hp: profile.life?.current,
+                    max_hp: profile.life?.maximum,
+                    status: profile.status?.state,
+                    status_description: profile.status?.description,
+                    last_action: {
+                        relative: profile.last_action?.relative,
+                        timestamp: profile.last_action?.timestamp
+                    }
+                },
+                chain: {
+                    hits: chain.current || 0,
+                    timeLeft: chain.timeout || 0,
+                    log: Array.isArray(chain.log) ? chain.log : []
+                },
+                faction: {
+                    id: faction.faction_id,
+                    name: faction.name,
+                    members: faction.members || {},
+                    rank: faction.rank,
+                    chain_report: faction.chain_report || null
+                },
+                war: {
+                    state: war.war?.status || "PEACE",
+                    faction: war.war?.faction || {},
+                    enemy: war.war?.enemy_faction || {},
+                    enemyMembers: war.war?.enemy_faction?.members || {}
+                }
+            };
         }
+    };
 
-        if (this.errorCount >= 5){
-            interval = 30;
-        }
-
-        return interval;
-    },
-
-    ////////////////////////////////////////////////////////
-    // API FETCH + NORMALIZATION
-    ////////////////////////////////////////////////////////
-
-    fetchIntel(){
-        const selections = "basic,profile,chain,faction,territory,crimes,networth,battlestats,travel,stocks,education,jobpoints,refills,hospital,jail,revives,war";
-
-        this.general.intel.request(selections)
-            .then(d => {
-                this.errorCount = 0;
-                this.lastFetch = Date.now();
-
-                const intel = this.normalizeIntel(d);
-                this.trackChain(intel.chain);
-
-                WAR_GENERAL.signals.dispatch("RAW_INTEL", intel);
-            })
-            .catch(err => {
-                this.errorCount++;
-                WARDBG("Lieutenant fetch error: " + err);
-            });
-    },
-
-    ////////////////////////////////////////////////////////
-    // CHAIN STABILITY
-    ////////////////////////////////////////////////////////
-
-    trackChain(chain){
-        this.chainSamples.push(chain);
-        if (this.chainSamples.length > 60) this.chainSamples.shift();
-    },
-
-    ////////////////////////////////////////////////////////
-    // INTEL NORMALIZATION
-    ////////////////////////////////////////////////////////
-
-    normalizeIntel(data){
-        const profile = data.profile || {};
-        const chain = data.chain || {};
-        const faction = data.faction || {};
-        const war = data.war || {};
-
-        const friendlyMembers = [];
-        const enemyMembers = [];
-
-        for (const id in faction.members || {}){
-            const m = faction.members[id];
-            friendlyMembers.push({
-                id: id,
-                name: m.name,
-                level: m.level,
-                status: m.status?.state || "",
-                last_action: (m.last_action?.timestamp || 0) * 1000,
-                factionPosition: m.position,
-                statusDetail: m.status || {}
-            });
-        }
-
-        const enemyFaction = war?.war?.enemy_faction || {};
-        for (const id in enemyFaction.members || {}){
-            const m = enemyFaction.members[id];
-            enemyMembers.push({
-                id: id,
-                name: m.name,
-                level: m.level,
-                status: m.status?.state || "",
-                last_action: (m.last_action?.timestamp || 0) * 1000,
-                factionPosition: m.position,
-                statusDetail: m.status || {}
-            });
-        }
-
-        const chainPackage = {
-            hits: chain.current || 0,
-            timeLeft: chain.timeout || 0,
-            momentum: this.computeChainMomentum(chain),
-            collapseRisk: this.computeCollapseRisk(chain)
-        };
-
-        return {
-            user: {
-                id: profile.player_id,
-                name: profile.name,
-                level: profile.level,
-                hp: profile.life?.current || 0,
-                max_hp: profile.life?.maximum || 1,
-                status: profile.status?.state || "",
-                last_action: (profile.last_action?.timestamp || 0) * 1000
-            },
-
-            friendlyFaction: {
-                id: faction.faction_id,
-                name: faction.name,
-                respect: faction.respect || 0,
-                members: friendlyMembers
-            },
-
-            enemyFaction: {
-                id: enemyFaction.faction_id || 0,
-                name: enemyFaction.name || "Unknown",
-                respect: enemyFaction.respect || 0,
-                members: enemyMembers,
-                territory: enemyFaction.territory || []
-            },
-
-            friendlyMembers,
-            enemyMembers,
-            chain: chainPackage
-        };
-    },
-
-    ////////////////////////////////////////////////////////
-    // MOMENTUM + COLLAPSE AI
-    ////////////////////////////////////////////////////////
-
-    computeChainMomentum(chain){
-        const hits = chain.current || 0;
-        const window = this.chainSamples.slice(-10);
-        const totalHits = window.reduce((sum,c)=> sum + (c.hits || 0), 0);
-        return Math.round((totalHits / (10 * (hits || 1))) * 100);
-    },
-
-    computeCollapseRisk(chain){
-        const t = chain.timeout || 0;
-        if (t > 90) return 0;
-        if (t > 60) return 10;
-        if (t > 45) return 25;
-        if (t > 30) return 40;
-        if (t > 15) return 70;
-        return 90;
+    if (typeof WAR_GENERAL !== "undefined") {
+        WAR_GENERAL.register("Lieutenant", Lieutenant);
+    } else if (typeof WARDBG === "function") {
+        WARDBG("Lieutenant failed to register: WAR_GENERAL missing");
     }
-};
-
-WAR_GENERAL.register("Lieutenant", Lieutenant);
 
 })();
