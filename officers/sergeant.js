@@ -28,7 +28,12 @@ const Sergeant = {
     sharedTargets: [],
     writeQueue: [],
     writeTimer: null,
-    pollTimer: null
+    pollTimer: null,
+
+    /* PATCH: throttle mechanism */
+    lastWriteTs: 0,
+    minWriteDelay: 1200,     // minimal spacing
+    maxWriteDelay: 5000      // hard cutoff to guarantee flush
 };
 
 /* BLOCK: INIT */
@@ -44,11 +49,11 @@ Sergeant.init = function(nexus){
             this.factionId = fid;
 
             if (this.pollTimer) {
-                clearInterval(this.pollTimer);  // PATCH
+                clearInterval(this.pollTimer);
                 this.pollTimer = null;
             }
 
-            this.startPolling();  // guaranteed single instance
+            this.startPolling();
         }
     });
 
@@ -67,7 +72,7 @@ Sergeant.init = function(nexus){
 /* BLOCK: POLLING */
 
 Sergeant.startPolling = function(){
-    if (this.pollTimer) clearInterval(this.pollTimer); // PATCH: double safety
+    if (this.pollTimer) clearInterval(this.pollTimer);
 
     this.pollTimer = setInterval(() => {
         if (!this.factionId) return;
@@ -80,6 +85,11 @@ Sergeant.startPolling = function(){
 /* BLOCK: REST GET */
 
 Sergeant.restGet = function(path, cb){
+    if (typeof GM_xmlhttpRequest !== "function"){
+        console.warn("GM_xmlhttpRequest unavailable");
+        return;
+    }
+
     GM_xmlhttpRequest({
         method: "GET",
         url: `${DB}/${path}.json`,
@@ -95,6 +105,11 @@ Sergeant.restGet = function(path, cb){
 /* BLOCK: REST PUT */
 
 Sergeant.restPut = function(path, value, cb){
+    if (typeof GM_xmlhttpRequest !== "function"){
+        console.warn("GM_xmlhttpRequest unavailable");
+        return;
+    }
+
     GM_xmlhttpRequest({
         method: "PUT",
         url: `${DB}/${path}.json`,
@@ -107,6 +122,11 @@ Sergeant.restPut = function(path, value, cb){
 /* BLOCK: REST PATCH */
 
 Sergeant.restPatch = function(path, value, cb){
+    if (typeof GM_xmlhttpRequest !== "function"){
+        console.warn("GM_xmlhttpRequest unavailable");
+        return;
+    }
+
     GM_xmlhttpRequest({
         method: "PATCH",
         url: `${DB}/${path}.json`,
@@ -132,28 +152,40 @@ Sergeant.pullAIMemory = function(){
 };
 
 /* BLOCK: AI MEMORY WRITE QUEUE */
+/* FIX: Debounce starvation → throttle + forced flush */
 
 Sergeant.enqueueWrite = function(path, payload){
-
     // PATCH: ensure path safety
     if (!path || typeof path !== "string") {
-        console.warn("Sergeant WARN: invalid AI memory write path:", path);
+        console.warn("Sergeant WARN: invalid write path:", path);
         return;
     }
 
     this.writeQueue.push({ path, payload });
+    const now = Date.now();
 
+    // Clear previous timer
     if (this.writeTimer) clearTimeout(this.writeTimer);
 
-    this.writeTimer = setTimeout(() => this.flushWriteQueue(), 1200);
+    // If enough time has passed, flush soon
+    const elapsed = now - this.lastWriteTs;
+
+    // If we haven't written for a while → flush sooner
+    const delay = (elapsed > this.maxWriteDelay)
+        ? 50
+        : this.minWriteDelay;
+
+    this.writeTimer = setTimeout(() => this.flushWriteQueue(), delay);
 };
 
+/* Ensures queue eventually drains regardless of spam */
 Sergeant.flushWriteQueue = function(){
     const q = [...this.writeQueue];
     this.writeQueue.length = 0;
 
+    this.lastWriteTs = Date.now();
+
     q.forEach(item => {
-        // PATCH: validate path again
         if (!item.path) return;
         this.restPut(item.path, item.payload);
     });
@@ -183,7 +215,7 @@ Sergeant.addSharedTarget = function(t){
 
     t.timestamp = Date.now();
 
-    // Ensure no duplicates
+    // no duplicates
     this.sharedTargets = this.sharedTargets.filter(x => x.id !== t.id);
     this.sharedTargets.push(t);
 
