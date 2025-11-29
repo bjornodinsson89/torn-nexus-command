@@ -104,7 +104,7 @@ Major.createUI = function(){
     this.btn = this.shadow.querySelector("#wnx-btn");
 };
 
-/* BLOCK: BASE STYLES (FUNCTIONAL GRITTY THEME) */
+/* BLOCK: BASE STYLES */
 
 Major.applyBaseStyles = function(){
     const s = document.createElement("style");
@@ -244,7 +244,7 @@ Major.bindTabs = function(){
     });
 };
 
-/* BLOCK: EVENT LISTENERS (NEXUS DATA>UI) */
+/* BLOCK: EVENT LISTENERS */
 
 Major.bindNexusEvents = function(){
     this.nexus.events.on("SITREP_UPDATE", d => {
@@ -252,7 +252,7 @@ Major.bindNexusEvents = function(){
         this.data.faction = d.factionMembers;
         this.data.enemy = d.enemyMembers;
         this.data.chain = d.chain;
-        this.data.targets = d.targets;
+        this.data.targets = d.targets || this.data.targets;
         this.data.ai = d.ai;
         this.renderActiveTab();
     });
@@ -284,86 +284,6 @@ Major.renderActiveTab = function(){
     else if (this.activeTab === "strategy") this.renderStrategy();
     else if (this.activeTab === "settings") this.renderSettings();
 };
-
-/* BLOCK: ADDITIONAL STYLES */
-
-(() => {
-    const s = document.createElement("style");
-    s.textContent = `
-        .wnx-section-title {
-            font-size: 14px;
-            font-weight: bold;
-            margin-bottom: 8px;
-            padding-bottom: 4px;
-            border-bottom: 1px solid #3E4042;
-            color: #F2F2F2;
-        }
-
-        .wnx-flex {
-            display: flex;
-            align-items: center;
-        }
-
-        .wnx-metric {
-            background: #2D2D2D;
-            border: 1px solid #3E4042;
-            padding: 10px;
-            border-radius: 4px;
-            margin-right: 10px;
-            flex: 1;
-            text-align: center;
-            color: #F2F2F2;
-        }
-
-        .wnx-metric-value {
-            font-size: 18px;
-            font-weight: bold;
-            margin-top: 4px;
-            color: #F2F2F2;
-        }
-
-        .wnx-traffic {
-            display: inline-block;
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            margin-left: 6px;
-        }
-
-        .wnx-green  { background: #3CCB5A; }
-        .wnx-yellow { background: #E5D543; }
-        .wnx-orange { background: #E59F3B; }
-        .wnx-red    { background: #E55454; }
-
-        #p-overview table th {
-            background: #2D2D2D;
-            color: #F2F2F2;
-            font-weight: bold;
-        }
-
-        .wnx-small {
-            font-size: 11px;
-            color: #BEBEBE;
-        }
-
-        .wnx-stats-row {
-            display: flex;
-            margin-bottom: 10px;
-        }
-
-        .wnx-pill {
-            padding: 4px 8px;
-            background: #36393E;
-            border: 1px solid #
-            3E4042;
-            border-radius: 3px;
-            font-size: 11px;
-            color: #F2F2F2;
-            margin-right: 6px;
-        }
-    `;
-    Major.shadow.appendChild(s);
-})();
 
 /* BLOCK: UTILITIES */
 
@@ -413,6 +333,8 @@ Major.renderOverview = function(){
         return;
     }
 
+    const timeLeftDisplay = (c.timeLeft ?? c.timeout ?? "N/A");
+
     p.innerHTML = `
         <div class="wnx-section-title">Operator</div>
         <div class="wnx-stats-row">
@@ -435,7 +357,7 @@ Major.renderOverview = function(){
         <div class="wnx-section-title">Chain</div>
         <div class="wnx-stats-row">
             ${this.smallStat("Hits", c.hits || 0)}
-            ${this.smallStat("Timeout", c.timeLeft ? c.timeLeft + "s" : "N/A")}
+            ${this.smallStat("Timeout", timeLeftDisplay + "s")}
             ${this.smallStat("Next Hit", a.prediction?.nextHit || 0)}
             ${this.smallStat("Drop Risk", a.prediction?.drop || 0)}
         </div>
@@ -514,11 +436,13 @@ Major.renderChain = function(){
         return;
     }
 
+    const timeLeftDisplay = (c.timeLeft ?? c.timeout ?? "N/A");
+
     p.innerHTML = `
         <div class="wnx-section-title">Chain Status</div>
         <div class="wnx-stats-row">
             ${this.smallStat("Hits", c.hits || 0)}
-            ${this.smallStat("Timeout", c.timeLeft ? c.timeLeft + "s" : "N/A")}
+            ${this.smallStat("Timeout", timeLeftDisplay + "s")}
             ${this.smallStat("Active", c.hits > 0 ? "YES" : "NO")}
         </div>
 
@@ -629,6 +553,8 @@ Major.renderStrategy = function(){
 
     const mode = this.strategyMode;
 
+    const timeLeftDisplay = (this.data.chain.timeLeft ?? this.data.chain.timeout ?? "N/A");
+
     p.innerHTML = `
         <div class="wnx-section-title">Combat Mode</div>
         <div style="display:flex;margin-bottom:14px;">
@@ -660,9 +586,10 @@ Major.renderStrategy = function(){
 
         <div class="wnx-section-title" style="margin-top:14px;">Visual Intelligence</div>
 
-        <div id="wnx-heatmap" style="height:
-        <div id="wnx-heatmap" style="height:180px;margin-bottom:16px;background:#2D2D2D;
-                                     border:1px solid #3E4042;"></div>
+        <!-- PATCHED: Fixed broken heatmap HTML -->
+        <div id="wnx-heatmap"
+             style="height:180px;margin-bottom:16px;background:#2D2D2D;
+                    border:1px solid #3E4042;"></div>
 
         <div id="wnx-strategy-chain-graph" style="height:180px;margin-bottom:16px;"></div>
         <div id="wnx-strategy-war-graph" style="height:180px;"></div>
