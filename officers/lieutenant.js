@@ -115,7 +115,8 @@ const Lieutenant = {
 
         let supplemental = {};
         try {
-            supplemental = await this.nexus.intel.requestUserV1("networth");
+            // PATCH: use existing V1 helper instead of nonexistent requestUserV1
+            supplemental = await this.nexus.intel.requestV1("user", "networth");
         } catch(e) {
             supplemental = {};
         }
