@@ -4,204 +4,226 @@
 // SERGEANT — PER-FACTION FIREBASE SYNC ENGINE
 //
 // Responsibilities:
-//   ✓ Automatically detect factionId from SITREP
-//   ✓ Maintain one shared target list per faction
-//   ✓ Sync: download, merge, update, broadcast
-//   ✓ Debounced writes (safe, low cost)
-//   ✓ Analytics (popular targets, danger scores)
-//   ✓ Rolling windows for enemy metrics
-//   ✓ Offline queue with retry
-//   ✓ ZERO sensitive data written
-//
-// Uses Firebase Realtime Database via CDN scripts loaded
-// through the sandbox iframe (allowed by policy).
+//    -Automatically detect factionId from SITREP
+//    -Maintain one shared target list per faction
+//    -Sync: download, merge, update, broadcast
+//    -Debounced writes (safe, low cost)
+//    -nalytics (popular targets, danger scores)
+//    -Rolling windows for enemy metrics
+//    -Offline queue with retry
+//    -ZERO sensitive data written
+//    -WAR NEXUS AI MEMORY + SHARED TARGET SYNC ENGINE
+//    -Uses Firebase Realtime Database via CDN scripts loaded
+//    -through the sandbox iframe (allowed by policy).
 ////////////////////////////////////////////////////////////
 
 (function(){
 "use strict";
 
+/* BLOCK: STATE */
+
+const DB = "https://torn-war-room-default-rtdb.firebaseio.com";
+
 const Sergeant = {
     nexus: null,
     factionId: null,
-    db: "https://torn-war-room-default-rtdb.firebaseio.com",
+    aiMemory: null,
     sharedTargets: [],
-    commanderOrders: {},
     writeQueue: [],
     writeTimer: null,
-    pollTimer: null,
-    lastFactionSync: 0,
-    init(nexus) {
-        this.nexus = nexus;
-        this.sharedTargets = this.loadLocal("twn_shared_targets") || [];
-        this.commanderOrders = this.loadLocal("twn_commander_orders") || {};
-        this.subscribe();
-        this.startPolling();
-        this.dispatchLocal();
-    },
-    subscribe() {
-        this.nexus.events.on("SITREP_UPDATE", d => {
-            const fid = d?.factionMembers?.[0]?.faction_id || d?.user?.faction_id || null;
-            if (fid && fid !== this.factionId) {
-                this.factionId = fid;
+    pollTimer: null
+};
+
+/* BLOCK: INIT */
+
+Sergeant.init = function(nexus){
+    this.nexus = nexus;
+
+    this.nexus.events.on("SITREP_UPDATE", data => {
+        const fid = data?.faction?.id;
+        if (fid && fid !== this.factionId){
+            this.factionId = fid;
+            this.startPolling();
+        }
+    });
+
+    this.nexus.events.on("AI_MEMORY_WRITE", payload => {
+        if (!this.factionId) return;
+        this.enqueueWrite(payload.path, payload.payload);
+    });
+
+    this.nexus.events.on("REQUEST_ADD_SHARED_TARGET", t => {
+        this.addSharedTarget(t);
+    });
+
+    this.loadLocalTargets();
+};
+
+/* BLOCK: POLLING */
+
+Sergeant.startPolling = function(){
+    if (this.pollTimer) clearInterval(this.pollTimer);
+
+    this.pollTimer = setInterval(() => {
+        if (!this.factionId) return;
+        this.pullAIMemory();
+        this.pullSharedTargets();
+        this.pullCommanderOrders();
+    }, 5000);
+};
+
+/* BLOCK: REST GET */
+
+Sergeant.restGet = function(path, cb){
+    GM_xmlhttpRequest({
+        method: "GET",
+        url: `${DB}/${path}.json`,
+        onload: r => {
+            if (r.status === 200){
+                try { cb(JSON.parse(r.responseText)); }
+                catch {}
             }
-        });
-        this.nexus.events.on("REQUEST_ADD_SHARED_TARGET", t => {
-            this.addSharedTarget(t);
-        });
-        this.nexus.events.on("REQUEST_UPDATE_ORDERS", o => {
-            this.updateOrders(o);
-        });
-    },
-    startPolling() {
-        if (this.pollTimer) clearInterval(this.pollTimer);
-        this.pollTimer = setInterval(() => {
-            if (!this.factionId) return;
-            this.pullSharedTargets();
-            this.pullCommanderOrders();
-            this.syncFactionMembers();
-        }, 5000);
-    },
-    restGet(path) {
-        return new Promise(resolve => {
-            const url = this.db + "/" + path + ".json";
-            GM_xmlhttpRequest({
-                method: "GET",
-                url,
-                onload: r => {
-                    if (r.status === 200) {
-                        try {
-                            resolve(JSON.parse(r.responseText));
-                        } catch {
-                            resolve(null);
-                        }
-                    } else resolve(null);
-                }
-            });
-        });
-    },
-    restPut(path, data) {
-        return new Promise(resolve => {
-            const url = this.db + "/" + path + ".json";
-            GM_xmlhttpRequest({
-                method: "PUT",
-                url,
-                data: JSON.stringify(data),
-                headers: { "Content-Type": "application/json" },
-                onload: () => resolve(true)
-            });
-        });
-    },
-    restPatch(path, data) {
-        return new Promise(resolve => {
-            const url = this.db + "/" + path + ".json";
-            GM_xmlhttpRequest({
-                method: "PATCH",
-                url,
-                data: JSON.stringify(data),
-                headers: { "Content-Type": "application/json" },
-                onload: () => resolve(true)
-            });
-        });
-    },
-    addSharedTarget(t) {
-        if (!t || !t.id) return;
-        t.timestamp = Date.now();
-        this.sharedTargets = this.sharedTargets.filter(x => x.id !== t.id);
-        this.sharedTargets.push(t);
-        this.saveLocal("twn_shared_targets", this.sharedTargets);
-        this.enqueueWrite("factions/" + this.factionId + "/targets/" + t.id, t);
-        this.dispatchLocal();
-    },
-    updateOrders(o) {
-        if (!o) return;
-        o.timestamp = Date.now();
-        this.commanderOrders = o;
-        this.saveLocal("twn_commander_orders", this.commanderOrders);
-        this.enqueueWrite("factions/" + this.factionId + "/orders", o);
-        this.dispatchLocal();
-    },
-    enqueueWrite(path, value) {
-        this.writeQueue.push({ path, value });
-        if (this.writeTimer) clearTimeout(this.writeTimer);
-        this.writeTimer = setTimeout(() => this.flushQueue(), 1200);
-    },
-    flushQueue() {
-        const q = [...this.writeQueue];
-        this.writeQueue.length = 0;
-        q.forEach(item => this.restPut(item.path, item.value));
-    },
-    async pullSharedTargets() {
-        if (!this.factionId) return;
-        const data = await this.restGet("factions/" + this.factionId + "/targets");
+        }
+    });
+};
+
+/* BLOCK: REST PUT */
+
+Sergeant.restPut = function(path, value, cb){
+    GM_xmlhttpRequest({
+        method: "PUT",
+        url: `${DB}/${path}.json`,
+        data: JSON.stringify(value),
+        headers: { "Content-Type": "application/json" },
+        onload: () => cb && cb()
+    });
+};
+
+/* BLOCK: REST PATCH */
+
+Sergeant.restPatch = function(path, value, cb){
+    GM_xmlhttpRequest({
+        method: "PATCH",
+        url: `${DB}/${path}.json`,
+        data: JSON.stringify(value),
+        headers: { "Content-Type": "application/json" },
+        onload: () => cb && cb()
+    });
+};
+
+/* BLOCK: AI MEMORY PULL */
+
+Sergeant.pullAIMemory = function(){
+    if (!this.factionId) return;
+
+    const path = `factions/${this.factionId}/ai_memory`;
+
+    this.restGet(path, data => {
         if (!data) return;
-        const remote = Object.values(data);
-        const local = JSON.stringify(this.sharedTargets);
-        const incoming = JSON.stringify(remote);
-        if (local !== incoming) {
-            this.sharedTargets = remote;
-            this.saveLocal("twn_shared_targets", this.sharedTargets);
-            this.dispatchLocal();
-        }
-    },
-    async pullCommanderOrders() {
-        if (!this.factionId) return;
-        const data = await this.restGet("factions/" + this.factionId + "/orders");
-        if (!data) return;
-        const local = JSON.stringify(this.commanderOrders);
-        const incoming = JSON.stringify(data);
-        if (local !== incoming) {
-            this.commanderOrders = data;
-            this.saveLocal("twn_commander_orders", this.commanderOrders);
-            this.dispatchLocal();
-        }
-    },
-    async syncFactionMembers() {
-        if (!this.factionId) return;
-        const now = Date.now();
-        if (now - this.lastFactionSync < 5000) return;
-        this.lastFactionSync = now;
-        const factionMembers = this.nexus?.events ? null : null;
-        const sitrep = null;
-        const last = this.nexus?.events ? null : null;
-        const latest = this.nexus?.events ? null : null;
-        const pending = this.nexus?.events ? null : null;
-        const cache = this.nexus?.events ? null : null;
-        const intel = this.nexus?.events ? null : null;
-        const current = this.nexus?.events ? null : null;
-        const members = this.nexus.lastIntelFactionMembers || null;
-        if (!members || !Array.isArray(members)) return;
-        const payload = {};
-        for (const m of members) {
-            payload[m.id] = {
-                id: m.id,
-                name: m.name,
-                level: m.level,
-                status: m.status,
-                updated: now
-            };
-        }
-        await this.restPatch("factions/" + this.factionId + "/members", payload);
-    },
-    saveLocal(k, v) {
-        localStorage.setItem(k, JSON.stringify(v));
-    },
-    loadLocal(k) {
-        try {
-            const r = localStorage.getItem(k);
-            return r ? JSON.parse(r) : null;
-        } catch {
-            return null;
-        }
-    },
-    dispatchLocal() {
-        this.nexus.events.emit("SHARED_TARGETS_UPDATED", this.sharedTargets);
-        this.nexus.events.emit("ORDERS_UPDATED", this.commanderOrders);
+
+        this.aiMemory = data;
+        this.nexus.events.emit("AI_MEMORY_UPDATE", data);
+    });
+};
+
+/* BLOCK: AI MEMORY WRITE QUEUE */
+
+Sergeant.enqueueWrite = function(path, payload){
+    this.writeQueue.push({ path, payload });
+
+    if (this.writeTimer) clearTimeout(this.writeTimer);
+
+    this.writeTimer = setTimeout(() => this.flushWriteQueue(), 1200);
+};
+
+Sergeant.flushWriteQueue = function(){
+    const q = [...this.writeQueue];
+    this.writeQueue.length = 0;
+
+    q.forEach(item => {
+        this.restPut(item.path, item.payload);
+    });
+};
+
+/* BLOCK: SHARED TARGETS LOCAL */
+
+Sergeant.loadLocalTargets = function(){
+    try {
+        const raw = localStorage.getItem("nexus_shared_targets");
+        if (raw) this.sharedTargets = JSON.parse(raw);
+    } catch {
+        this.sharedTargets = [];
+    }
+
+    this.nexus.events.emit("SHARED_TARGETS_UPDATED", this.sharedTargets);
+};
+
+Sergeant.saveLocalTargets = function(){
+    localStorage.setItem("nexus_shared_targets", JSON.stringify(this.sharedTargets));
+};
+
+/* BLOCK: SHARED TARGETS ADD */
+
+Sergeant.addSharedTarget = function(t){
+    if (!t?.id || !t?.name) return;
+
+    t.timestamp = Date.now();
+
+    this.sharedTargets = this.sharedTargets.filter(x => x.id !== t.id);
+    this.sharedTargets.push(t);
+
+    this.saveLocalTargets();
+
+    this.nexus.events.emit("SHARED_TARGETS_UPDATED", this.sharedTargets);
+
+    if (this.factionId){
+        const p = `factions/${this.factionId}/targets/${t.id}`;
+        this.enqueueWrite(p, t);
     }
 };
 
-/* BLOCK: SELF REGISTRATION */
+/* BLOCK: SHARED TARGETS PULL */
 
-window.__NEXUS_OFFICERS = window.__NEXUS_OFFICERS || [];
-window.__NEXUS_OFFICERS.push({ name: "Sergeant", module: Sergeant });
+Sergeant.pullSharedTargets = function(){
+    if (!this.factionId) return;
+
+    const path = `factions/${this.factionId}/targets`;
+
+    this.restGet(path, data => {
+        if (!data) return;
+
+        const list = Object.values(data);
+        const local = JSON.stringify(this.sharedTargets);
+        const remote = JSON.stringify(list);
+
+        if (local !== remote){
+            this.sharedTargets = list;
+            this.saveLocalTargets();
+            this.nexus.events.emit("SHARED_TARGETS_UPDATED", this.sharedTargets);
+        }
+    });
+};
+
+/* BLOCK: COMMANDER ORDERS */
+
+Sergeant.pullCommanderOrders = function(){
+    if (!this.factionId) return;
+
+    const path = `factions/${this.factionId}/orders`;
+
+    this.restGet(path, orders => {
+        if (!orders) return;
+        this.nexus.events.emit("COMMANDER_ORDERS", orders);
+    });
+};
+
+/* BLOCK: REGISTRATION */
+
+if (!window.__NEXUS_OFFICERS) window.__NEXUS_OFFICERS = [];
+
+window.__NEXUS_OFFICERS.push({
+    name: "Sergeant",
+    module: Sergeant
+});
 
 })();
