@@ -11,25 +11,32 @@
 class MajorUI {
     constructor() {
         this.general = null;
-
-        // DOM Elements
         this.host = null;
         this.shadow = null;
 
-        // State
         this.activeTab = "overview";
-        this.docked = true;          // starts attached to the side
-        this.dockSide = "left";       // left or right
-        this.detached = false;        // floating window mode
+        this.docked = true;
+        this.dockSide = "left";
+        this.detached = false;
         this.dragging = false;
         this.offsetX = 0;
         this.offsetY = 0;
 
-        // Dimensions for floating window
         this.floatWidth = 380;
         this.floatHeight = 520;
         this.floatX = 40;
         this.floatY = 60;
+
+        this.targetSubTab = "war"; // default to AI war targets
+
+        this.store = {
+            user: null,
+            chain: null,
+            faction: [],
+            enemies: [],
+            targets: { personal: [], war: [], shared: [] },
+            ai: null
+        };
     }
 
     // -------------------------------------------------------
@@ -41,12 +48,14 @@ class MajorUI {
         this.renderBase();
         this.renderStyles();
         this.initEvents();
+        this.bindSignals();
+        this.setTab("overview");
 
-        WARDBG("Major v8.0 (Phase 1 UI Framework) online");
+        if (typeof WARDBG === "function") WARDBG("Major v8.1 online");
     }
 
     // -------------------------------------------------------
-    // CREATE SHADOW HOST
+    // HOST + SHADOW
     // -------------------------------------------------------
     createHost() {
         if (document.getElementById("nexus-major-host")) return;
@@ -61,7 +70,7 @@ class MajorUI {
     }
 
     // -------------------------------------------------------
-    // RENDER BASE HTML STRUCTURE
+    // BASE MARKUP
     // -------------------------------------------------------
     renderBase() {
         this.shadow.innerHTML = `
@@ -85,19 +94,26 @@ class MajorUI {
                 </div>
 
                 <div id="content">
-                    <div class="tab-panel" id="t-overview">OVERVIEW PANEL</div>
-                    <div class="tab-panel" id="t-faction">FACTION PANEL</div>
-                    <div class="tab-panel" id="t-enemy">ENEMY PANEL</div>
-                    <div class="tab-panel" id="t-war">WAR PANEL</div>
-                    <div class="tab-panel" id="t-chain">CHAIN PANEL</div>
-                    <div class="tab-panel" id="t-targets">TARGETS PANEL</div>
-                    <div class="tab-panel" id="t-ai">AI PANEL</div>
+                    <div class="tab-panel" id="t-overview"></div>
+                    <div class="tab-panel" id="t-faction"></div>
+                    <div class="tab-panel" id="t-enemy"></div>
+                    <div class="tab-panel" id="t-war"></div>
+                    <div class="tab-panel" id="t-chain"></div>
+                    <div class="tab-panel" id="t-targets">
+                        <div id="target-tabs">
+                            <button data-ttab="personal">PERSONAL</button>
+                            <button data-ttab="war" class="on">WAR</button>
+                            <button data-ttab="shared">SHARED</button>
+                        </div>
+                        <div id="target-table"></div>
+                    </div>
+                    <div class="tab-panel" id="t-ai"></div>
                     <div class="tab-panel" id="t-settings">
-                        <b>Settings (Phase 1)</b><br><br>
-                        <button id="opt-dock-left">Dock Left</button><br><br>
-                        <button id="opt-dock-right">Dock Right</button><br><br>
-                        <button id="opt-detach">Detach / Float</button><br><br>
-                        <button id="opt-attach">Attach</button><br><br>
+                        <div class="section-title">Panel Position</div>
+                        <button class="cfg" id="opt-dock-left">Dock Left</button>
+                        <button class="cfg" id="opt-dock-right">Dock Right</button>
+                        <button class="cfg" id="opt-detach">Detach / Float</button>
+                        <button class="cfg" id="opt-attach">Attach</button>
                     </div>
                 </div>
             </div>
@@ -107,7 +123,7 @@ class MajorUI {
     }
 
     // -------------------------------------------------------
-    // STYLING
+    // STYLES
     // -------------------------------------------------------
     renderStyles() {
         const css = `
@@ -134,7 +150,7 @@ class MajorUI {
             #panel {
                 position: fixed;
                 width: 380px;
-                height: 60vh; /* mid-height slide panel */
+                height: 60vh;
                 background: #050505;
                 border: 2px solid #00f3ff;
                 border-radius: 12px;
@@ -197,14 +213,89 @@ class MajorUI {
                 padding: 10px;
                 color: #fff;
                 font-family: sans-serif;
+                font-size: 13px;
             }
 
-            .tab-panel {
-                display: none;
+            .tab-panel { display: none; }
+            .tab-panel.on { display: block; }
+
+            .metric-row { margin-bottom: 4px; }
+            .metric-label { color:#00f3ff; }
+
+            table {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 12px;
+            }
+            th, td {
+                border-bottom: 1px solid #222;
+                padding: 3px 4px;
+            }
+            th {
+                background: #000;
+                color: #00f3ff;
+                position: sticky;
+                top: 0;
+                z-index: 1;
             }
 
-            .tab-panel.on {
-                display: block;
+            #target-tabs {
+                display:flex;
+                margin-bottom:6px;
+            }
+            #target-tabs button {
+                flex:1;
+                background:#000;
+                color:#00f3ff;
+                border:1px solid #00f3ff;
+                margin-right:2px;
+                padding:4px;
+                cursor:pointer;
+                font-size:11px;
+            }
+            #target-tabs button.on {
+                background:#00f3ff;
+                color:#000;
+            }
+
+            #ai-log {
+                background:#000;
+                border:1px solid #00f3ff;
+                height:220px;
+                overflow-y:auto;
+                padding:6px;
+                margin-bottom:6px;
+                font-family:monospace;
+                font-size:12px;
+                color:#0ff;
+            }
+            .ai-msg { margin-bottom:4px; }
+            .ai-msg.me { color:#fff; }
+
+            #ai-input {
+                width:100%;
+                padding:6px;
+                background:#000;
+                border:1px solid #00f3ff;
+                color:#00f3ff;
+                font-size:13px;
+            }
+
+            .section-title {
+                margin-bottom:4px;
+                color:#00f3ff;
+                font-weight:bold;
+                font-size:13px;
+            }
+            .cfg {
+                display:block;
+                margin-bottom:6px;
+                background:#000;
+                color:#00f3ff;
+                border:1px solid #00f3ff;
+                padding:4px;
+                width:100%;
+                cursor:pointer;
             }
         `;
 
@@ -214,7 +305,7 @@ class MajorUI {
     }
 
     // -------------------------------------------------------
-    // EVENT BINDINGS
+    // EVENTS
     // -------------------------------------------------------
     initEvents() {
         const btn = this.shadow.getElementById("btn");
@@ -231,38 +322,77 @@ class MajorUI {
             });
         });
 
+        // Target subtabs
+        this.shadow.querySelectorAll("#target-tabs button").forEach(b => {
+            b.addEventListener("click", () => {
+                this.targetSubTab = b.dataset.ttab;
+                this.shadow.querySelectorAll("#target-tabs button")
+                    .forEach(x => x.classList.remove("on"));
+                b.classList.add("on");
+                this.renderTargets();
+            });
+        });
+
         // Draggable floating mode
         const header = this.shadow.getElementById("header");
         header.addEventListener("mousedown", e => this.startDrag(e));
         window.addEventListener("mousemove", e => this.onDrag(e));
         window.addEventListener("mouseup", () => this.endDrag());
 
-        // Settings actions
+        // Settings
         this.shadow.getElementById("opt-dock-left").onclick = () => {
+            this.detached = false;
             this.docked = true;
             this.dockSide = "left";
-            this.detached = false;
             this.applyDockPosition();
         };
-
         this.shadow.getElementById("opt-dock-right").onclick = () => {
+            this.detached = false;
             this.docked = true;
             this.dockSide = "right";
-            this.detached = false;
             this.applyDockPosition();
         };
-
         this.shadow.getElementById("opt-detach").onclick = () => {
             this.detached = true;
             this.docked = false;
             this.applyFloating();
         };
-
         this.shadow.getElementById("opt-attach").onclick = () => {
             this.detached = false;
             this.docked = true;
             this.applyDockPosition();
         };
+    }
+
+    // -------------------------------------------------------
+    // SIGNALS (DATA)
+    // -------------------------------------------------------
+    bindSignals() {
+        this.general.signals.listen("SITREP_UPDATE", data => {
+            if (data.user) this.store.user = data.user;
+            if (data.chain) this.store.chain = data.chain;
+            if (data.factionMembers) this.store.faction = data.factionMembers;
+            if (data.enemyFactionMembers) this.store.enemies = data.enemyFactionMembers;
+            if (data.targets) this.store.targets = data.targets;
+            if (data.ai) this.store.ai = data.ai;
+            this.renderPanel();
+        });
+
+        this.general.signals.listen("SHARED_TARGETS_UPDATED", list => {
+            this.store.targets.shared = list || [];
+            if (this.activeTab === "targets") this.renderTargets();
+        });
+
+        this.general.signals.listen("ASK_COLONEL_RESPONSE", d => {
+            const log = this.shadow.getElementById("ai-log");
+            if (log && d.answer) {
+                const div = document.createElement("div");
+                div.className = "ai-msg";
+                div.textContent = d.answer;
+                log.appendChild(div);
+                log.scrollTop = log.scrollHeight;
+            }
+        });
     }
 
     // -------------------------------------------------------
@@ -277,50 +407,58 @@ class MajorUI {
 
         this.shadow.querySelectorAll(".tab-panel")
             .forEach(p => p.classList.remove("on"));
-        this.shadow.getElementById(`t-${name}`).classList.add("on");
+        const panel = this.shadow.getElementById(`t-${name}`);
+        if (panel) panel.classList.add("on");
+
+        this.renderPanel();
+    }
+
+    renderPanel() {
+        if (this.activeTab === "overview") this.renderOverview();
+        else if (this.activeTab === "faction") this.renderFaction();
+        else if (this.activeTab === "enemy") this.renderEnemies();
+        else if (this.activeTab === "war") this.renderWar();
+        else if (this.activeTab === "chain") this.renderChain();
+        else if (this.activeTab === "targets") this.renderTargets();
+        else if (this.activeTab === "ai") this.renderAI();
     }
 
     // -------------------------------------------------------
-    // DOCKED MODE POSITIONING
+    // POSITIONING
     // -------------------------------------------------------
     applyDockPosition() {
         const panel = this.shadow.getElementById("panel");
+        if (!panel) return;
 
-        panel.style.display = "none"; // allow reposition before showing
+        panel.style.width = "380px";
+        panel.style.height = "60vh";
 
         if (this.dockSide === "left") {
             panel.style.left = "0";
+            panel.style.right = "";
         } else {
             panel.style.left = "";
             panel.style.right = "0";
         }
 
-        // Vertical middle
         panel.style.top = "20vh";
-
-        panel.classList.add("on");
     }
 
-    // -------------------------------------------------------
-    // FLOATING WINDOW MODE
-    // -------------------------------------------------------
     applyFloating() {
         const panel = this.shadow.getElementById("panel");
+        if (!panel) return;
 
         panel.style.left = this.floatX + "px";
         panel.style.top = this.floatY + "px";
         panel.style.width = this.floatWidth + "px";
         panel.style.height = this.floatHeight + "px";
-
-        panel.classList.add("on");
     }
 
     // -------------------------------------------------------
-    // DRAG HANDLING
+    // DRAG HANDLING (FLOAT MODE ONLY)
     // -------------------------------------------------------
     startDrag(e) {
         if (!this.detached) return;
-
         this.dragging = true;
         this.offsetX = e.clientX - this.floatX;
         this.offsetY = e.clientY - this.floatY;
@@ -328,20 +466,225 @@ class MajorUI {
 
     onDrag(e) {
         if (!this.dragging) return;
-
         this.floatX = e.clientX - this.offsetX;
         this.floatY = e.clientY - this.offsetY;
-
         this.applyFloating();
     }
 
     endDrag() {
         this.dragging = false;
     }
+
+    // -------------------------------------------------------
+    // RENDERING HELPERS
+    // -------------------------------------------------------
+    renderOverview() {
+        const p = this.shadow.getElementById("t-overview");
+        const u = this.store.user;
+        const c = this.store.chain;
+        const a = this.store.ai;
+        const f = this.store.faction;
+        const e = this.store.enemies;
+
+        if (!u || !c || !a) {
+            p.textContent = "Waiting for intel...";
+            return;
+        }
+
+        const onlineFaction = f.filter(m => m.online).length;
+        const onlineEnemies = e.filter(m => m.online).length;
+
+        p.innerHTML = `
+            <div class="section-title">Operator</div>
+            <div class="metric-row"><span class="metric-label">Name:</span> ${u.name} (Lv ${u.level})</div>
+            <div class="metric-row"><span class="metric-label">Life:</span> ${u.hp}/${u.max_hp}</div>
+            <div class="metric-row"><span class="metric-label">Status:</span> ${u.status}</div>
+
+            <br>
+            <div class="section-title">Chain</div>
+            <div class="metric-row"><span class="metric-label">Hits:</span> ${c.hits}</div>
+            <div class="metric-row"><span class="metric-label">Timeout:</span> ${c.timeLeft}s</div>
+
+            <br>
+            <div class="section-title">Factions</div>
+            <div class="metric-row"><span class="metric-label">Allies Online:</span> ${onlineFaction}</div>
+            <div class="metric-row"><span class="metric-label">Enemies Online:</span> ${onlineEnemies}</div>
+
+            <br>
+            <div class="section-title">AI Threat Model</div>
+            <div class="metric-row"><span class="metric-label">Threat:</span> ${Math.round(a.threat*100)}%</div>
+            <div class="metric-row"><span class="metric-label">Risk:</span> ${Math.round(a.risk*100)}%</div>
+            <div class="metric-row"><span class="metric-label">Aggression:</span> ${Math.round(a.aggression*100)}%</div>
+            <div class="metric-row"><span class="metric-label">Instability:</span> ${Math.round(a.instability*100)}%</div>
+            <div class="metric-row"><span class="metric-label">Next Hit ETA:</span> ${a.prediction.nextHit}</div>
+            <div class="metric-row"><span class="metric-label">Potential Drop:</span> ${a.prediction.drop}s</div>
+            <br>
+            <div class="metric-row"><span class="metric-label">Notes:</span><br>${a.notes.map(n => "• "+n).join("<br>")}</div>
+        `;
+    }
+
+    renderFaction() {
+        const p = this.shadow.getElementById("t-faction");
+        const list = this.store.faction;
+
+        if (!Array.isArray(list) || list.length === 0) {
+            p.textContent = "No faction intel yet.";
+            return;
+        }
+
+        p.innerHTML = `
+            <table>
+                <tr><th>Name</th><th>Lv</th><th>Status</th><th>Online</th><th>Last Action</th></tr>
+                ${list.map(m => `
+                    <tr>
+                        <td>${m.name}</td>
+                        <td>${m.level}</td>
+                        <td>${m.status}</td>
+                        <td>${m.online ? "🟢" : "⚫"}</td>
+                        <td>${m.last_action || ""}</td>
+                    </tr>
+                `).join("")}
+            </table>
+        `;
+    }
+
+    renderEnemies() {
+        const p = this.shadow.getElementById("t-enemy");
+        const list = this.store.enemies;
+
+        if (!Array.isArray(list) || list.length === 0) {
+            p.textContent = "No enemy intel yet.";
+            return;
+        }
+
+        p.innerHTML = `
+            <table>
+                <tr><th>Name</th><th>Lv</th><th>Status</th><th>Online</th><th>Score</th></tr>
+                ${list.map(m => `
+                    <tr>
+                        <td>${m.name}</td>
+                        <td>${m.level}</td>
+                        <td>${m.status}</td>
+                        <td>${m.online ? "🟢" : "⚫"}</td>
+                        <td>${m.score}</td>
+                    </tr>
+                `).join("")}
+            </table>
+        `;
+    }
+
+    renderWar() {
+        const p = this.shadow.getElementById("t-war");
+        const e = this.store.enemies;
+        const targets = this.store.targets.war || [];
+
+        if (!this.store.ai) {
+            p.textContent = "No war intel yet.";
+            return;
+        }
+
+        p.innerHTML = `
+            <div class="section-title">War Snapshot</div>
+            <div class="metric-row"><span class="metric-label">Known enemy combatants:</span> ${e.length}</div>
+            <div class="metric-row"><span class="metric-label">AI Threat:</span> ${Math.round(this.store.ai.threat*100)}%</div>
+            <div class="metric-row"><span class="metric-label">Chain Hits:</span> ${(this.store.chain && this.store.chain.hits) || 0}</div>
+            <br>
+            <div class="section-title">AI Priority Targets</div>
+        `;
+
+        const best = (targets.length ? targets : e).slice(0, 15);
+
+        p.innerHTML += `
+            <table>
+                <tr><th>Name</th><th>Lv</th><th>Status</th><th>Online</th><th>Score</th></tr>
+                ${best.map(t => `
+                    <tr>
+                        <td><a href="https://www.torn.com/profiles.php?XID=${t.id}" target="_blank">${t.name}</a></td>
+                        <td>${t.level}</td>
+                        <td>${t.status}</td>
+                        <td>${t.online ? "🟢" : "⚫"}</td>
+                        <td>${t.score || 0}</td>
+                    </tr>
+                `).join("")}
+            </table>
+        `;
+    }
+
+    renderChain() {
+        const p = this.shadow.getElementById("t-chain");
+        const c = this.store.chain;
+
+        if (!c) {
+            p.textContent = "No chain intel yet.";
+            return;
+        }
+
+        p.innerHTML = `
+            <div class="section-title">Chain Status</div>
+            <div class="metric-row"><span class="metric-label">Hits:</span> ${c.hits}</div>
+            <div class="metric-row"><span class="metric-label">Timeout:</span> ${c.timeLeft}s</div>
+        `;
+    }
+
+    renderTargets() {
+        const container = this.shadow.getElementById("target-table");
+        const tstore = this.store.targets || {};
+        let list = [];
+
+        if (this.targetSubTab === "personal") list = tstore.personal || [];
+        else if (this.targetSubTab === "war") list = tstore.war && tstore.war.length ? tstore.war : this.store.enemies;
+        else if (this.targetSubTab === "shared") list = tstore.shared || [];
+
+        if (!list || list.length === 0) {
+            container.textContent = "No targets available in this category.";
+            return;
+        }
+
+        container.innerHTML = `
+            <table>
+                <tr><th>Name</th><th>Lv</th><th>Status</th><th>Online</th>${this.targetSubTab === "war" ? "<th>Score</th>" : ""}</tr>
+                ${list.map(t => `
+                    <tr>
+                        <td><a href="https://www.torn.com/profiles.php?XID=${t.id}" target="_blank">${t.name}</a></td>
+                        <td>${t.level || ""}</td>
+                        <td>${t.status || ""}</td>
+                        <td>${t.online ? "🟢" : "⚫"}</td>
+                        ${this.targetSubTab === "war" ? `<td>${t.score || 0}</td>` : ""}
+                    </tr>
+                `).join("")}
+            </table>
+        `;
+    }
+
+    renderAI() {
+        const p = this.shadow.getElementById("t-ai");
+        p.innerHTML = `
+            <div id="ai-log"></div>
+            <input id="ai-input" placeholder="Ask the Colonel...">
+        `;
+
+        const input = this.shadow.getElementById("ai-input");
+        const log = this.shadow.getElementById("ai-log");
+
+        input.addEventListener("keydown", e => {
+            if (e.key === "Enter" && input.value.trim()) {
+                const q = input.value.trim();
+
+                const div = document.createElement("div");
+                div.className = "ai-msg me";
+                div.textContent = "> " + q;
+                log.appendChild(div);
+                log.scrollTop = log.scrollHeight;
+
+                this.general.signals.dispatch("ASK_COLONEL", { question: q });
+                input.value = "";
+            }
+        });
+    }
 }
 
 // -----------------------------------------------------------
-// REGISTRATION (auto retry)
+// REGISTRATION
 // -----------------------------------------------------------
 function register() {
     if (window.WAR_GENERAL && WAR_GENERAL.register) {
