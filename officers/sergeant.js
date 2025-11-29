@@ -20,7 +20,7 @@
 (function() {
 "use strict";
 
-const DB = "https://torn-war-room-default-rtdb.firebaseio.com";
+const DB = "https://console.firebase.google.com/u/0/project/torn-war-room/database/torn-war-room-default-rtdb/data/~2F";
 
 const Sergeant = {
 
