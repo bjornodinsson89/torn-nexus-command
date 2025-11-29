@@ -12,22 +12,22 @@ WAR_SANDBOX.register("Lieutenant", (function(){
 //  - Feeding Colonel + Sergeant + Major with raw intel
 ////////////////////////////////////////////////////////////
 
+(function(){
+
+WARDBG("Lieutenant file loaded.");
+
 const Lieutenant = {
 
     general: null,
     tick: 0,
-    mode: "idle",  // "idle", "active", "critical"
+    mode: "idle",
     lastFetch: 0,
     errorCount: 0,
-
-    // rolling windows
     chainSamples: [],
 
     init(general){
         this.general = general;
         WARDBG("Lieutenant online (Adaptive Intel Engine)");
-
-        // Begin heartbeat
         this.startHeartbeat();
     },
 
@@ -49,22 +49,18 @@ const Lieutenant = {
     },
 
     computeHeartbeatInterval(){
-        // Without API key—do nothing
         if (!this.general.intel.hasCredentials()) return 30;
 
-        // Default 15 seconds
         let interval = 15;
 
         const latest = this.chainSamples[this.chainSamples.length - 1];
         const hits = latest?.hits || 0;
         const timeout = latest?.timeLeft || 0;
 
-        // If chain active
         if (hits > 0){
             this.mode = "active";
             interval = 5;
 
-            // Critical mode — if timeout short
             if (timeout <= 45){
                 this.mode = "critical";
                 interval = 1;
@@ -73,7 +69,6 @@ const Lieutenant = {
             this.mode = "idle";
         }
 
-        // If many errors—slow down
         if (this.errorCount >= 5){
             interval = 30;
         }
@@ -96,8 +91,7 @@ const Lieutenant = {
                 const intel = this.normalizeIntel(d);
                 this.trackChain(intel.chain);
 
-                // Dispatch to Colonel & Sergeant
-                WAR_SANDBOX.signals.dispatch("RAW_INTEL", intel);
+                WAR_GENERAL.signals.dispatch("RAW_INTEL", intel);
             })
             .catch(err => {
                 this.errorCount++;
@@ -106,7 +100,7 @@ const Lieutenant = {
     },
 
     ////////////////////////////////////////////////////////
-    // CHAIN STABILITY MODELING
+    // CHAIN STABILITY
     ////////////////////////////////////////////////////////
 
     trackChain(chain){
@@ -115,7 +109,7 @@ const Lieutenant = {
     },
 
     ////////////////////////////////////////////////////////
-    // NORMALIZATION — builds the intel package
+    // INTEL NORMALIZATION
     ////////////////////////////////////////////////////////
 
     normalizeIntel(data){
@@ -127,41 +121,38 @@ const Lieutenant = {
         const friendlyMembers = [];
         const enemyMembers = [];
 
-        // Friendly faction members
         for (const id in faction.members || {}){
             const m = faction.members[id];
             friendlyMembers.push({
-                id,
+                id: id,
                 name: m.name,
                 level: m.level,
                 status: m.status?.state || "",
-                last_action: m.last_action?.timestamp || 0,
+                last_action: (m.last_action?.timestamp || 0) * 1000,
                 factionPosition: m.position,
-                statusDetail: m.status || {},
+                statusDetail: m.status || {}
             });
         }
 
-        // Enemy faction members
-        const enemy = war?.war?.enemy_faction || {};
-        for (const id in enemy.members || {}){
-            const m = enemy.members[id];
+        const enemyFaction = war?.war?.enemy_faction || {};
+        for (const id in enemyFaction.members || {}){
+            const m = enemyFaction.members[id];
             enemyMembers.push({
-                id,
+                id: id,
                 name: m.name,
                 level: m.level,
                 status: m.status?.state || "",
-                last_action: m.last_action?.timestamp || 0,
+                last_action: (m.last_action?.timestamp || 0) * 1000,
                 factionPosition: m.position,
-                statusDetail: m.status || {},
+                statusDetail: m.status || {}
             });
         }
 
-        // Chain metrics
-        const chainModel = {
+        const chainPackage = {
             hits: chain.current || 0,
             timeLeft: chain.timeout || 0,
             momentum: this.computeChainMomentum(chain),
-            collapseRisk: this.computeCollapseRisk(chain),
+            collapseRisk: this.computeCollapseRisk(chain)
         };
 
         return {
@@ -172,7 +163,7 @@ const Lieutenant = {
                 hp: profile.life?.current || 0,
                 max_hp: profile.life?.maximum || 1,
                 status: profile.status?.state || "",
-                last_action: profile.last_action?.timestamp || 0,
+                last_action: (profile.last_action?.timestamp || 0) * 1000
             },
 
             friendlyFaction: {
@@ -183,31 +174,27 @@ const Lieutenant = {
             },
 
             enemyFaction: {
-                id: enemy.faction_id || 0,
-                name: enemy.name || "Unknown",
-                respect: enemy.respect || 0,
-                territory: enemy.territory || [],
-                members: enemyMembers
+                id: enemyFaction.faction_id || 0,
+                name: enemyFaction.name || "Unknown",
+                respect: enemyFaction.respect || 0,
+                members: enemyMembers,
+                territory: enemyFaction.territory || []
             },
 
             friendlyMembers,
             enemyMembers,
-            chain: chainModel
+            chain: chainPackage
         };
     },
 
     ////////////////////////////////////////////////////////
-    // CHAIN MOMENTUM & COLLAPSE AI
+    // MOMENTUM + COLLAPSE AI
     ////////////////////////////////////////////////////////
 
     computeChainMomentum(chain){
         const hits = chain.current || 0;
-        const t = chain.timeout || 0;
-
-        // Simple model: how many hits in last N samples
         const window = this.chainSamples.slice(-10);
-        const totalHits = window.reduce((sum, c) => sum + (c.hits || 0), 0);
-
+        const totalHits = window.reduce((sum,c)=> sum + (c.hits || 0), 0);
         return Math.round((totalHits / (10 * (hits || 1))) * 100);
     },
 
@@ -219,9 +206,9 @@ const Lieutenant = {
         if (t > 30) return 40;
         if (t > 15) return 70;
         return 90;
-    },
+    }
 };
 
-return Lieutenant;
+WAR_GENERAL.register("Lieutenant", Lieutenant);
 
-})());
+})();
