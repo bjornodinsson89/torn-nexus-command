@@ -18,8 +18,6 @@
 (function(){
 "use strict";
 
-/* BLOCK: STATE */
-
 const Colonel = {
     nexus: null,
     mode: "HYBRID",
@@ -32,7 +30,7 @@ const Colonel = {
         chain: {},
         war: {},
         enemyFaction: {},
-        enemyMembers: {}
+        enemyMembers: {}   // PATCH: Ensures correct structure
     },
 
     ai: {
@@ -72,33 +70,69 @@ const Colonel = {
 Colonel.init = function(nexus){
     this.nexus = nexus;
 
+    // RAW intel from Lieutenant
     this.nexus.events.on("RAW_INTEL", data => {
         this.ingestIntel(data);
     });
 
+    // AI mode switch
     this.nexus.events.on("SET_AI_MODE", mode => {
         this.mode = mode;
         this.ai.mode = mode;
         this.recomputeAI();
     });
 
+    // AI memory updated from Firebase
     this.nexus.events.on("AI_MEMORY_UPDATE", mem => {
         if (mem) this.memory = mem;
+    });
+
+    // PATCH: Listener for ASK_COLONEL (Major console)
+    this.nexus.events.on("ASK_COLONEL", payload => {
+        this.answerAI(payload);
     });
 };
 
 /* BLOCK: INGEST INTEL */
 
 Colonel.ingestIntel = function(d){
+
+    // BASIC user/faction/war data
     this.state.user = d.user || {};
     this.state.faction = d.faction || {};
-    this.state.factionMembers = d.factionMembers || {};
+    this.state.factionMembers = d.faction?.members || {};
     this.state.chain = d.chain || {};
     this.state.war = d.war || {};
-    this.state.enemyFaction = d.enemyFaction || {};
-    this.state.enemyMembers = d.enemyMembers || {};
 
-    this.lastIntelTs = d.ts || Date.now();
+    // PATCH: Convert Lieutenant "enemies" format → flat enemyMembers dictionary
+    // Lieutenant sends: [{ id, name, members:{...} }]
+    // We flatten all war enemies into one uniform enemyMembers map
+
+    const enemyMembers = {};
+    if (Array.isArray(d.enemies)) {
+        for (const ef of d.enemies) {
+            if (ef.members) {
+                for (const id in ef.members) {
+                    const em = ef.members[id];
+                    enemyMembers[id] = {
+                        id: Number(id),
+                        name: em.name || "Unknown",
+                        level: em.level || 0,
+                        status: em.status?.state || "",
+                        last_action: em.last_action?.timestamp || 0,
+                        online: em.status?.state === "Online" ? true : false,
+                        // PATCH: keep original structure intact
+                        ...em
+                    };
+                }
+            }
+        }
+    }
+
+    this.state.enemyMembers = enemyMembers;  // PATCHED
+    this.state.enemyFaction = d.enemies || []; // Keep the original source as-is
+
+    this.lastIntelTs = d.timestamp || Date.now();
 
     this.learnFromIntel();
     this.recomputeAI();
@@ -133,20 +167,32 @@ Colonel.learnFromIntel = function(){
         if (st.includes("hospital")){
             mem.hospTrend.push(now);
         }
+
+        // PATCH: Trim long arrays to prevent memory bloat
+        if (mem.onlineTrend.length > 500) mem.onlineTrend.splice(0, 200);
+        if (mem.hospTrend.length > 500) mem.hospTrend.splice(0, 200);
     }
 
     const chain = this.state.chain || {};
-    if (typeof chain.hits === "number" && typeof chain.timeLeft === "number"){
+
+    // PATCH: chain.timeLeft → chain.timeout
+    const timeLeft = chain.timeLeft ?? chain.timeout ?? 0;
+
+    if (typeof chain.hits === "number" && typeof timeLeft === "number"){
         this.memory.chain.pace.push({
             ts: now,
             hits: chain.hits,
-            timeLeft: chain.timeLeft
+            timeLeft: timeLeft
         });
 
-        if (chain.timeLeft < 20){
+        if (timeLeft < 20){
             this.memory.chain.drops.push(now);
         }
     }
+
+    // Trim chain memory
+    if (this.memory.chain.pace.length > 400)
+        this.memory.chain.pace.splice(0, 200);
 
     const war = this.state.war || {};
     if (war && war.status){
@@ -154,6 +200,9 @@ Colonel.learnFromIntel = function(){
             ts: now,
             status: war.status
         });
+
+        if (this.memory.war.aggression.length > 400)
+            this.memory.war.aggression.splice(0, 200);
     }
 
     if (now - this.memory.lastSync > 60000){
@@ -197,23 +246,24 @@ Colonel.recomputeAI = function(){
     if (hosp < enemyList.length * 0.5) threat += 0.1 * weights.vulnerability;
 
     const chain = this.state.chain || {};
+    const timeLeft = chain.timeLeft ?? chain.timeout ?? 0;  // PATCH
+
     if (chain.hits > 0) aggression += (chain.hits / 10) * weights.window;
 
-    if (chain.timeLeft < 20) risk += 0.7;
-    else if (chain.timeLeft < 60) risk += 0.3;
+    if (timeLeft < 20) risk += 0.7;
+    else if (timeLeft < 60) risk += 0.3;
 
-    const sf = this.state.factionMembers || {};
     const userObj = this.state.user || {};
     if (userObj.status && userObj.status.toLowerCase().includes("hospital")){
         risk += 0.2;
     }
 
-    instability = Math.abs((chain.timeLeft || 0) - 30) / 60;
+    instability = Math.abs(timeLeft - 30) / 60;
 
     const avgPace = this.estimateChainPace();
 
     const nextHit = Math.round((online * threat * weights.window) + avgPace);
-    const drop = chain.timeLeft < 120 ? (120 - chain.timeLeft) / 1.5 : 0;
+    const drop = timeLeft < 120 ? (120 - timeLeft) / 1.5 : 0;
 
     threat = Math.min(1, threat);
     risk = Math.min(1, risk);
@@ -326,6 +376,7 @@ Colonel.answerAI = function(payload){
 
     const a = this.ai;
     const c = this.state.chain;
+    const timeLeft = c.timeLeft ?? c.timeout ?? 0;  // PATCH
 
     if (type === "THREAT"){
         answer = `Threat level is ${Math.round(a.threat * 100)}%.`;
@@ -334,7 +385,7 @@ Colonel.answerAI = function(payload){
         answer = `Chain risk is ${Math.round(a.risk * 100)}%.`;
     }
     else if (type === "CHAIN"){
-        answer = `Chain at ${c.hits || 0} hits with ${c.timeLeft || 0}s remaining.`;
+        answer = `Chain at ${c.hits || 0} hits with ${timeLeft}s remaining.`;
     }
     else if (type === "BEST"){
         answer = `Best target: ${a.topTargets[0]?.name || "None"} (${a.topTargets[0]?.score || 0} score).`;
