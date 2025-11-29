@@ -1,7 +1,4 @@
 // major.js — Full Command Console UI for Torn War Nexus
-// COMPLETE FILE — NO PLACEHOLDERS, NO STUBS, NO MISSING LOGIC
-
-(function(){
 
 ////////////////////////////////////////////////////////////
 // MAJOR — FULL COMMAND CONSOLE UI
@@ -9,7 +6,17 @@
 // Receives SITREP from Colonel via WAR_GENERAL.signals.
 ////////////////////////////////////////////////////////////
 
-WARDBG("MAJOR.JS INITIATED");
+(function(){
+
+//////////////////////////
+// SAFE DEBUG WRAPPER   //
+//////////////////////////
+
+function dbg(msg){
+    if (typeof window.WARDBG === "function") {
+        window.WARDBG(msg);
+    }
+}
 
 //////////////////////////
 // STATE & DATA MODELS //
@@ -18,30 +25,28 @@ WARDBG("MAJOR.JS INITIATED");
 class MajorState {
     constructor(){
         this.user = null;
-        this.chain = null;
+        this.chain = { hits:0, timeLeft:0, momentum:0, collapseRisk:0 };
         this.friendlyFaction = null;
         this.enemyFaction = null;
         this.enemyMembers = [];
         this.friendlyMembers = [];
-        this.ai = null;
+        this.ai = { threat:0, risk:0, tempo:0, instability:0 };
         this.sharedTargets = [];
-        this.activityFriendly = [];
-        this.activityEnemy = [];
-        this.lastActivityUpdate = 0;
+        this.activityFriendly = Array(30).fill(0);
+        this.activityEnemy = Array(30).fill(0);
     }
 
     updateFromSitrep(s){
-        this.user = s.user;
-        this.chain = s.chain;
-        this.friendlyFaction = s.friendlyFaction;
-        this.enemyFaction = s.enemyFaction;
-        this.enemyMembers = s.enemyMembers;
-        this.friendlyMembers = s.friendlyMembers;
-        this.ai = s.ai;
-        this.sharedTargets = s.sharedTargets || this.sharedTargets;
-        this.activityFriendly = s.activityFriendly || this.activityFriendly;
-        this.activityEnemy = s.activityEnemy || this.activityEnemy;
-        this.lastActivityUpdate = Date.now();
+        if (s.user) this.user = s.user;
+        if (s.chain) this.chain = s.chain;
+        if (s.friendlyFaction) this.friendlyFaction = s.friendlyFaction;
+        if (s.enemyFaction) this.enemyFaction = s.enemyFaction;
+        if (Array.isArray(s.enemyMembers)) this.enemyMembers = s.enemyMembers;
+        if (Array.isArray(s.friendlyMembers)) this.friendlyMembers = s.friendlyMembers;
+        if (s.ai) this.ai = s.ai;
+        if (Array.isArray(s.sharedTargets)) this.sharedTargets = s.sharedTargets;
+        if (Array.isArray(s.activityFriendly)) this.activityFriendly = s.activityFriendly;
+        if (Array.isArray(s.activityEnemy)) this.activityEnemy = s.activityEnemy;
     }
 }
 
@@ -50,7 +55,8 @@ class MajorState {
 /////////////////////////////////
 
 class MajorUI {
-    constructor(){
+    constructor(general){
+        this.general = general;
         this.state = new MajorState();
         this.visible = false;
         this.shadow = null;
@@ -58,9 +64,12 @@ class MajorUI {
 
         this.initFrame();
         this.renderBase();
+        this.cacheRoots();
         this.attachEvents();
 
-        WAR_GENERAL.signals.listen("SITREP_UPDATE", d => {
+        // Hook into SITREP updates from Colonel (via WAR_GENERAL.signals)
+        this.general.signals.listen("SITREP_UPDATE", d => {
+            dbg("MajorUI: SITREP_UPDATE received");
             this.state.updateFromSitrep(d);
             this.renderAll();
         });
@@ -237,7 +246,9 @@ class MajorUI {
                 <div id="activityTab" class="tabContent"></div>
             </div>
         `;
+    }
 
+    cacheRoots(){
         this.root = {
             toggleBtn: this.shadow.querySelector("#toggleBtn"),
             panel: this.shadow.querySelector("#panel"),
@@ -342,15 +353,15 @@ class MajorUI {
 
         let rows = "";
         S.enemyMembers.forEach(m => {
-            const idle = Date.now() - (m.last_action || 0);
-            const online = idle < 600000;
+            const idleMs = Date.now() - ((m.last_action || 0) * 1000);
+            const online = idleMs < 600000;
             const cls = online ? "ok" : "danger";
 
             rows += `
                 <tr>
                     <td>${m.name}</td>
                     <td>${m.level}</td>
-                    <td class="${cls}">${online?"ONLINE":"OFFLINE"}</td>
+                    <td class="${cls}">${online ? "ONLINE" : "OFFLINE"}</td>
                     <td>${m.status}</td>
                     <td>${Math.round((m.threat || 0)*100)}%</td>
                 </tr>
@@ -406,9 +417,9 @@ class MajorUI {
 
         div.querySelectorAll(".delTargetBtn").forEach(btn=>{
             btn.addEventListener("click",()=>{
-                const idx = parseInt(btn.dataset.idx);
+                const idx = parseInt(btn.dataset.idx,10);
                 this.state.sharedTargets.splice(idx,1);
-                WAR_GENERAL.signals.dispatch("UPDATE_TARGETS", this.state.sharedTargets);
+                this.general.signals.dispatch("UPDATE_TARGETS", this.state.sharedTargets);
                 this.renderTargets();
             });
         });
@@ -418,7 +429,7 @@ class MajorUI {
             if (!name) return;
 
             this.state.sharedTargets.push({ name });
-            WAR_GENERAL.signals.dispatch("UPDATE_TARGETS", this.state.sharedTargets);
+            this.general.signals.dispatch("UPDATE_TARGETS", this.state.sharedTargets);
             this.renderTargets();
         });
     }
@@ -431,7 +442,7 @@ class MajorUI {
         const S = this.state;
         const div = this.root.activityTab;
 
-        if (S.activityFriendly.length === 0){
+        if (!S.activityFriendly || S.activityFriendly.length === 0){
             div.innerHTML = "Collecting faction activity data…";
             return;
         }
@@ -443,11 +454,8 @@ class MajorUI {
             </div>
         `;
 
-        this.drawActivityGraph(
-            this.shadow.querySelector("#activityCanvas"),
-            S.activityFriendly,
-            S.activityEnemy
-        );
+        const canvas = this.shadow.querySelector("#activityCanvas");
+        this.drawActivityGraph(canvas, S.activityFriendly, S.activityEnemy);
     }
 
     ////////////////////////////////
@@ -455,6 +463,7 @@ class MajorUI {
     ////////////////////////////////
 
     drawActivityGraph(canvas, friendly, enemy){
+        if (!canvas || !canvas.getContext) return;
         const ctx = canvas.getContext("2d");
 
         ctx.fillStyle = "#111";
@@ -468,40 +477,50 @@ class MajorUI {
 
         const stepX = canvas.width / 30;
 
-        ///////////////////////
         // Friendly (Blue)
-        ///////////////////////
         ctx.strokeStyle = "#0af";
         ctx.beginPath();
-
         friendly.forEach((v,i)=>{
             const x = i * stepX;
             const y = canvas.height - (v/maxVal)*canvas.height;
             if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
         });
-
         ctx.stroke();
 
-        ///////////////////////
         // Enemy (Red)
-        ///////////////////////
         ctx.strokeStyle = "#f33";
         ctx.beginPath();
-
         enemy.forEach((v,i)=>{
             const x = i * stepX;
             const y = canvas.height - (v/maxVal)*canvas.height;
             if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
         });
-
         ctx.stroke();
     }
 }
 
-///////////////////////
-// INIT MAJOR UI     //
-///////////////////////
+//////////////////////////
+// BOOTSTRAP MAJOR UI  //
+//////////////////////////
 
-new MajorUI();
+function bootWhenReady(){
+    if (typeof window.WAR_GENERAL === "undefined" || !window.WAR_GENERAL.signals) {
+        // WAR_GENERAL not ready yet — try again in 300ms
+        setTimeout(bootWhenReady, 300);
+        return;
+    }
+
+    dbg("MAJOR.JS INITIATED (WAR_GENERAL detected)");
+
+    try {
+        new MajorUI(window.WAR_GENERAL);
+        dbg("MajorUI constructed successfully.");
+    } catch (e){
+        dbg("MajorUI construction error: " + e);
+    }
+}
+
+// Kick off the wait loop
+bootWhenReady();
 
 })();
