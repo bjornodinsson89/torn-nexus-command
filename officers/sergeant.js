@@ -8,13 +8,10 @@
 //    -Maintain one shared target list per faction
 //    -Sync: download, merge, update, broadcast
 //    -Debounced writes (safe, low cost)
-//    -nalytics (popular targets, danger scores)
+//    -Analytics
 //    -Rolling windows for enemy metrics
-//    -Offline queue with retry
+//    -Offline queue
 //    -ZERO sensitive data written
-//    -WAR NEXUS AI MEMORY + SHARED TARGET SYNC ENGINE
-//    -Uses Firebase Realtime Database via CDN scripts loaded
-//    -through the sandbox iframe (allowed by policy).
 ////////////////////////////////////////////////////////////
 
 (function(){
@@ -41,9 +38,17 @@ Sergeant.init = function(nexus){
 
     this.nexus.events.on("SITREP_UPDATE", data => {
         const fid = data?.faction?.id;
+
+        // PATCH: prevent duplicate polling timers
         if (fid && fid !== this.factionId){
             this.factionId = fid;
-            this.startPolling();
+
+            if (this.pollTimer) {
+                clearInterval(this.pollTimer);  // PATCH
+                this.pollTimer = null;
+            }
+
+            this.startPolling();  // guaranteed single instance
         }
     });
 
@@ -62,7 +67,7 @@ Sergeant.init = function(nexus){
 /* BLOCK: POLLING */
 
 Sergeant.startPolling = function(){
-    if (this.pollTimer) clearInterval(this.pollTimer);
+    if (this.pollTimer) clearInterval(this.pollTimer); // PATCH: double safety
 
     this.pollTimer = setInterval(() => {
         if (!this.factionId) return;
@@ -129,6 +134,13 @@ Sergeant.pullAIMemory = function(){
 /* BLOCK: AI MEMORY WRITE QUEUE */
 
 Sergeant.enqueueWrite = function(path, payload){
+
+    // PATCH: ensure path safety
+    if (!path || typeof path !== "string") {
+        console.warn("Sergeant WARN: invalid AI memory write path:", path);
+        return;
+    }
+
     this.writeQueue.push({ path, payload });
 
     if (this.writeTimer) clearTimeout(this.writeTimer);
@@ -141,6 +153,8 @@ Sergeant.flushWriteQueue = function(){
     this.writeQueue.length = 0;
 
     q.forEach(item => {
+        // PATCH: validate path again
+        if (!item.path) return;
         this.restPut(item.path, item.payload);
     });
 };
@@ -169,6 +183,7 @@ Sergeant.addSharedTarget = function(t){
 
     t.timestamp = Date.now();
 
+    // Ensure no duplicates
     this.sharedTargets = this.sharedTargets.filter(x => x.id !== t.id);
     this.sharedTargets.push(t);
 
