@@ -173,16 +173,24 @@ Colonel.learnFromIntel = function(){
         if (mem.hospTrend.length > 500) mem.hospTrend.splice(0, 200);
     }
 
+    // PATCH: Remove enemies not seen for 24 hours (memory leak fix)
+    const cutoff = now - 24 * 60 * 60 * 1000;
+    for (const id in this.memory.enemy){
+        if (this.memory.enemy[id].lastSeen < cutoff){
+            delete this.memory.enemy[id];
+        }
+    }
+
     const chain = this.state.chain || {};
 
-    // PATCH: chain.timeLeft → chain.timeout
+    // PATCH: chain.timeLeft → chain.timeout normalization
     const timeLeft = chain.timeLeft ?? chain.timeout ?? 0;
 
     if (typeof chain.hits === "number" && typeof timeLeft === "number"){
         this.memory.chain.pace.push({
             ts: now,
             hits: chain.hits,
-            timeLeft: timeLeft
+            timeLeft
         });
 
         if (timeLeft < 20){
@@ -293,8 +301,8 @@ Colonel.estimateChainPace = function(){
     const last = arr[arr.length - 1];
     const prev = arr[arr.length - 2];
 
-    const dt = (last.ts - prev.ts) / 1000;
-    if (dt <= 0) return 0;
+    const dt = Math.max( (last.ts - prev.ts) / 1000, 0 );
+    if (dt <= 0.0001) return 0;               // PATCH: Prevent divide-by-zero or tiny dt
 
     const dh = last.hits - prev.hits;
     if (dh <= 0) return 0;
