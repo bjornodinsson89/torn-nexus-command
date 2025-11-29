@@ -12,110 +12,118 @@
 //  - Decides *when* and *what* to fetch from Torn
 ////////////////////////////////////////////////////////////
 
-(function(){
-"use strict";
+(function () {
+    'use strict';
 
-const Lieutenant = {
+    const Lieutenant = {
+        general: null,
+        interval: null,
+        tick: 0,
+        chainActive: false,
+        chainTimeout: 0,
+        lastError: null,
 
-    general: null,
-    tick: 0,
-    chainActive: false,
-    chainTimeout: 0,
-    interval: null,
+        init(G) {
+            this.general = G;
 
-    init(G) {
-        this.general = G;
-
-        if (typeof WARDBG === "function")
-            WARDBG("Lieutenant online (v8.0 API FIX)");
-
-        // Poll every second → adaptive rate
-        this.interval = setInterval(() => {
-            if (!this.general.intel.hasCredentials()) return;
-            this.tick++;
-            if (this.tick >= this.getRate()) {
-                this.tick = 0;
-                this.fetchIntel();
+            if (typeof WARDBG === 'function') {
+                WARDBG('Lieutenant online (v8.2, v1-safe)');
             }
-        }, 1000);
-    },
 
-    // Adaptive intelligence polling
-    getRate() {
-        if (this.chainActive && this.chainTimeout < 45) return 1;
-        if (this.chainActive) return 3;
-        return 12;
-    },
+            // Heartbeat every 1s; decides when to pull
+            this.interval = setInterval(() => {
+                if (!this.general.intel.hasCredentials()) return;
 
-    // -------------------------
-    // MAIN API CALL
-    // -------------------------
-    fetchIntel() {
-        const selections =
-            "basic,personalstats,battlestats,chain,faction,travel";
+                this.tick++;
+                const rate = this.getRate(); // seconds between pulls
 
-        this.general.intel.request(selections)
-            .then(raw => this.handleSuccess(raw))
-            .catch(err => {
-                if (typeof WARDBG === "function")
-                    WARDBG("Lieutenant INTEL ERROR: " + err);
-            });
-    },
+                if (this.tick >= rate) {
+                    this.tick = 0;
+                    this.requestIntel();
+                }
+            }, 1000);
+        },
 
-    handleSuccess(raw) {
-        const chain = raw.chain || {};
+        // Dynamic polling based on chain status
+        getRate() {
+            if (this.chainActive && this.chainTimeout < 45) return 1;  // high tension
+            if (this.chainActive) return 3;                             // active chain
+            return 15;                                                  // peace
+        },
 
-        this.chainActive = (chain.current || 0) > 0;
-        this.chainTimeout = chain.timeout || 0;
+        requestIntel() {
+            // *** IMPORTANT ***
+            // We ONLY request fields that belong to the USER section of v1.
+            // Valid combo here (per docs): basic,profile,chain,faction
+            //
+            // territory / war are NOT user selections and were causing
+            // API error "Wrong fields". Those are intentionally left out.
+            this.general.intel.requestUser('basic,profile,chain,faction')
+                .then(d => {
+                    this.lastError = null;
+                    const intel = this.normalize(d);
+                    this.general.signals.dispatch('RAW_INTEL', intel);
+                })
+                .catch(err => {
+                    this.lastError = err;
+                    if (typeof WARDBG === 'function') {
+                        WARDBG('Lieutenant INTEL ERROR: ' + err);
+                    }
+                });
+        },
 
-        const intel = this.normalize(raw);
-        this.general.signals.dispatch("RAW_INTEL", intel);
-    },
+        normalize(d) {
+            const chain = d.chain || {};
+            const profile = d.profile || {};
+            const faction = d.faction || {};
+            const war = d.war || {};       // will usually be {} here (we're not requesting v1 war anymore)
 
-    // -------------------------
-    // NORMALIZATION
-    // -------------------------
-    normalize(d) {
-        const c = d.chain || {};
-        const f = d.faction || {};
-        const b = d.basic || {};
+            // Maintain internal chain status for rate logic
+            this.chainActive = (chain.current || 0) > 0;
+            this.chainTimeout = chain.timeout || 0;
 
-        return {
-            user: {
-                id: b.player_id,
-                name: b.name,
-                level: b.level,
-                status: b.status?.state,
-                hp: b.life?.current,
-                max_hp: b.life?.maximum,
-                last_action: b.last_action
-            },
+            return {
+                user: {
+                    id: profile.player_id,
+                    name: profile.name,
+                    level: profile.level,
+                    hp: profile.life?.current,
+                    max_hp: profile.life?.maximum,
+                    status: profile.status?.state,
+                    status_description: profile.status?.description,
+                    last_action: {
+                        relative: profile.last_action?.relative,
+                        timestamp: profile.last_action?.timestamp
+                    }
+                },
+                chain: {
+                    hits: chain.current || 0,
+                    timeLeft: chain.timeout || 0,
+                    log: Array.isArray(chain.log) ? chain.log : []
+                },
+                faction: {
+                    id: faction.faction_id,
+                    name: faction.name,
+                    members: faction.members || {},
+                    rank: faction.rank,
+                    chain_report: faction.chain_report || null
+                },
+                // War/enemy data will generally be empty until we wire a proper
+                // faction/war call (v1 or v2) – Colonel handles empty safely.
+                war: {
+                    state: war.war?.status || 'PEACE',
+                    faction: war.war?.faction || {},
+                    enemy: war.war?.enemy_faction || {},
+                    enemyMembers: war.war?.enemy_faction?.members || {}
+                }
+            };
+        }
+    };
 
-            chain: {
-                hits: c.current || 0,
-                timeLeft: c.timeout || 0,
-                log: c.log || []
-            },
-
-            faction: {
-                id: f.faction_id,
-                name: f.name,
-                members: f.members || {}
-            },
-
-            // 🔥 No longer provided by Torn API
-            war: {
-                state: "NO_DATA",
-                faction: {},
-                enemy: {},
-                enemyMembers: {}
-            }
-        };
+    if (typeof WAR_GENERAL !== 'undefined') {
+        WAR_GENERAL.register('Lieutenant', Lieutenant);
+    } else if (typeof WARDBG === 'function') {
+        WARDBG('Lieutenant failed to register: WAR_GENERAL missing');
     }
-};
-
-if (typeof WAR_GENERAL !== "undefined") {
-    WAR_GENERAL.register("Lieutenant", Lieutenant);
-}
 
 })();
