@@ -1,7 +1,4 @@
 // sergeant.js — Full Firebase Sync + Analytics Engine
-// COMPLETE FILE 
-
-WAR_SANDBOX.register("Sergeant", (function(){
 
 ////////////////////////////////////////////////////////////
 // SERGEANT — PER-FACTION FIREBASE SYNC ENGINE
@@ -20,6 +17,10 @@ WAR_SANDBOX.register("Sergeant", (function(){
 // through the sandbox iframe (allowed by policy).
 ////////////////////////////////////////////////////////////
 
+(function(){
+
+WARDBG("Sergeant file loaded.");
+
 const Sergeant = {
 
     general: null,
@@ -30,11 +31,10 @@ const Sergeant = {
 
     sharedTargets: [],
     analytics: {
-        hits: {},            // targetName → times referenced
-        popularity: [],      // sorted list for UI
+        hits: {},
+        popularity: []
     },
 
-    writeQueue: [],
     writeTimer: null,
     syncInterval: null,
 
@@ -42,102 +42,123 @@ const Sergeant = {
         this.general = general;
         WARDBG("Sergeant online (Firebase Engine)");
 
-        // Listen for SITREP updates from Colonel
         general.signals.listen("SITREP_UPDATE", sitrep => {
             this.handleSitrep(sitrep);
         });
 
-        // Listen for UI requests to update targets
         general.signals.listen("UPDATE_TARGETS", list => {
             this.updateTargetsFromUI(list);
         });
 
-        // Load Firebase JS into the iframe
-        this.loadFirebaseScripts();
+        this.safeLoadFirebase();
     },
 
-    ////////////////////////////////////////////////////////
-    // LOAD FIREBASE SDK (inside iframe sandbox)
-    ////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////
+    // SAFE FIREBASE LOADER (NO CSP ISSUES, OPTIONAL MODE)
+    ////////////////////////////////////////////////////////////////////////
 
-    loadFirebaseScripts(){
-        WARDBG("Sergeant: Loading Firebase SDK...");
+    safeLoadFirebase(){
+        WARDBG("Sergeant: Loading Firebase (sandbox mode).");
 
-        const script1 = document.createElement("script");
-        script1.src = "https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js";
+        const appUrl = "https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js";
+        const dbUrl  = "https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js";
 
-        const script2 = document.createElement("script");
-        script2.src = "https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js";
+        GM_xmlhttpRequest({
+            method: "GET",
+            url: appUrl,
+            onload: r1 => {
+                try {
+                    new Function("window","WARDBG", r1.responseText)(unsafeWindow, WARDBG);
 
-        script2.onload = () => {
-            WARDBG("Firebase SDK loaded.");
-            this.initializeFirebase();
-        };
+                    GM_xmlhttpRequest({
+                        method: "GET",
+                        url: dbUrl,
+                        onload: r2 => {
+                            try {
+                                new Function("window","WARDBG", r2.responseText)(unsafeWindow, WARDBG);
+                                WARDBG("Firebase SDK loaded in sandbox.");
+                                this.safeInitFirebase();
+                            } catch(e){
+                                WARDBG("Firebase DB load error: " + e);
+                            }
+                        },
+                        onerror:()=>WARDBG("Firebase DB network error")
+                    });
 
-        script1.onload = () => {
-            document.body.appendChild(script2);
-        };
-
-        document.body.appendChild(script1);
+                } catch(e){
+                    WARDBG("Firebase APP load error: " + e);
+                }
+            },
+            onerror:()=>WARDBG("Firebase APP network error")
+        });
     },
 
-    ////////////////////////////////////////////////////////
-    // FIREBASE INIT
-    ////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////
+    // INITIALIZE FIREBASE (SAFE MODE)
+    ////////////////////////////////////////////////////////////////////////
 
-    initializeFirebase(){
+    safeInitFirebase(){
         const config = {
-            apiKey: "AIzaSyDUMMY-PROVIDED-HERE-FOR-LOCAL",
-            authDomain: "torn-nexus-data.firebaseapp.com",
-            databaseURL: "https://torn-nexus-data-default-rtdb.firebaseio.com",
-            projectId: "torn-nexus-data",
-            storageBucket: "torn-nexus-data.appspot.com",
-            messagingSenderId: "000000000",
-            appId: "1:000000000:web:000000000"
+            apiKey: "",
+            authDomain: "",
+            databaseURL: "",
+            projectId: "",
+            storageBucket: "",
+            messagingSenderId: "",
+            appId: ""
         };
 
-        firebase.initializeApp(config);
-        this.db = firebase.database();
-        this.firebaseReady = true;
+        if (!config.databaseURL || config.databaseURL === ""){
+            WARDBG("Firebase SAFE MODE: No config provided. Skipping DB sync.");
+            this.firebaseReady = false;
+            return;
+        }
 
-        WARDBG("Firebase initialized.");
+        try {
+            firebase.initializeApp(config);
+            this.db = firebase.database();
+            this.firebaseReady = true;
+            WARDBG("Sergeant: Firebase initialized.");
+        } catch(e){
+            WARDBG("Firebase init error (SAFE MODE ACTIVE): " + e);
+            this.firebaseReady = false;
+        }
     },
 
-    ////////////////////////////////////////////////////////
-    // HANDLE SITREP (detect faction, sync intel)
-    ////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////
+    // SITREP → SYNC HANDLER
+    ////////////////////////////////////////////////////////////////////////
 
     handleSitrep(sitrep){
-        if (!this.firebaseReady) return;
+        if (!sitrep) return;
 
-        // Detect faction ID
-        const newFactionId = sitrep?.friendlyFaction?.id || null;
+        const newFaction = sitrep?.friendlyFaction?.id || null;
+        if (!newFaction) return;
 
-        if (!newFactionId) return;
+        if (!this.firebaseReady){
+            return;
+        }
 
-        // First time learning factionId
         if (!this.factionId){
-            this.factionId = newFactionId;
+            this.factionId = newFaction;
             this.startSyncLoop();
         }
 
-        // If faction changed (rare)
-        if (this.factionId !== newFactionId){
-            this.factionId = newFactionId;
+        if (this.factionId !== newFaction){
+            this.factionId = newFaction;
             this.sharedTargets = [];
             this.startSyncLoop();
         }
 
-        // Track analytics on enemy faction data
-        this.computeAnalytics(sitrep.enemyMembers);
+        this.computeAnalytics(sitrep.enemyMembers || []);
     },
 
-    ////////////////////////////////////////////////////////
-    // CONTINUOUS SYNC LOOP
-    ////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////
+    // SYNC LOOP
+    ////////////////////////////////////////////////////////////////////////
 
     startSyncLoop(){
-        WARDBG("Sergeant: Starting sync loop for faction " + this.factionId);
+        WARDBG("Sergeant: Sync loop started for faction " + this.factionId);
 
         if (this.syncInterval) clearInterval(this.syncInterval);
 
@@ -148,33 +169,29 @@ const Sergeant = {
         this.downloadRemoteTargets();
     },
 
-    ////////////////////////////////////////////////////////
-    // DOWNLOAD TARGETS FROM FIREBASE
-    ////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////
+    // DOWNLOAD TARGET LIST
+    ////////////////////////////////////////////////////////////////////////
 
     downloadRemoteTargets(){
         if (!this.firebaseReady || !this.factionId) return;
 
         const ref = this.db.ref("sharedTargets/" + this.factionId);
 
-        ref.once("value").then(snapshot=>{
-            const data = snapshot.val();
+        ref.once("value").then(snap=>{
+            const data = snap.val();
 
             if (!data){
-                // Nothing in DB yet — push our state
                 this.pushToFirebase();
                 return;
             }
 
             const remote = data.list || [];
-
-            // Merge local & remote without duplicates
             const merged = this.mergeLists(this.sharedTargets, remote);
 
             this.sharedTargets = merged;
 
-            // Broadcast updated list to Major
-            WAR_SANDBOX.signals.dispatch("SITREP_UPDATE", {
+            WAR_GENERAL.signals.dispatch("SITREP_UPDATE", {
                 sharedTargets: merged,
                 activityFriendly: [],
                 activityEnemy: []
@@ -185,46 +202,43 @@ const Sergeant = {
         });
     },
 
-    ////////////////////////////////////////////////////////
-    // MERGE SHARED TARGET LISTS (no duplicates)
-    ////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////
+    // UNIQUE MERGE
+    ////////////////////////////////////////////////////////////////////////
 
     mergeLists(local, remote){
         const map = new Map();
-
         local.forEach(t => map.set(t.name, t));
         remote.forEach(t => map.set(t.name, t));
-
         return Array.from(map.values());
     },
 
-    ////////////////////////////////////////////////////////
-    // HANDLE UI UPDATES
-    ////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////
+    // UI → NEW TARGET LIST
+    ////////////////////////////////////////////////////////////////////////
 
     updateTargetsFromUI(list){
-        this.sharedTargets = list;
+        this.sharedTargets = Array.isArray(list) ? list : [];
         this.queueWrite();
     },
 
-    ////////////////////////////////////////////////////////
-    // WRITE QUEUEING + DEBOUNCING
-    ////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////
+    // WRITE QUEUE / DEBOUNCE
+    ////////////////////////////////////////////////////////////////////////
 
     queueWrite(){
         if (!this.firebaseReady || !this.factionId) return;
 
         if (this.writeTimer) clearTimeout(this.writeTimer);
 
-        // Debounced by 1.2 seconds
         this.writeTimer = setTimeout(()=>{
             this.pushToFirebase();
         }, 1200);
     },
 
-    ////////////////////////////////////////////////////////
-    // PUSH TO FIREBASE (safe, small writes)
-    ////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////
+    // PUSH TARGET LIST TO FIREBASE
+    ////////////////////////////////////////////////////////////////////////
 
     pushToFirebase(){
         if (!this.firebaseReady || !this.factionId) return;
@@ -244,30 +258,25 @@ const Sergeant = {
         });
     },
 
-    ////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////
     // ANALYTICS ENGINE
-    ////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////
 
     computeAnalytics(enemyMembers){
-        // Reset hit map
         this.analytics.hits = {};
 
-        enemyMembers.forEach(m => {
-            const name = m.name;
-
-            // Count popularity — used in other scripts to choose targets
-            this.analytics.hits[name] = (this.analytics.hits[name] || 0) + 1;
+        enemyMembers.forEach(m=>{
+            this.analytics.hits[m.name] = (this.analytics.hits[m.name] || 0) + 1;
         });
 
-        // Sort popularity list
         const sorted = Object.entries(this.analytics.hits)
             .sort((a,b)=>b[1]-a[1])
-            .map(x=>({ name: x[0], count: x[1] }));
+            .map(x => ({ name: x[0], count: x[1] }));
 
         this.analytics.popularity = sorted;
     }
 };
 
-return Sergeant;
+WAR_GENERAL.register("Sergeant", Sergeant);
 
-})());
+})();
