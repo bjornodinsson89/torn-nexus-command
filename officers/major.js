@@ -22,7 +22,6 @@ const Major = {
     targetSubTab: "personal",
     strategyMode: "HYBRID",
     
-    // Logic Guards
     renderHookApplied: false,
     dataScale: 1.0,
 
@@ -43,7 +42,7 @@ Major.init = function(nexus){
     this.nexus = nexus;
     this.createHost();
     this.createUI();
-    this.applyTacticalStyles(); // New visual engine
+    this.applyTacticalStyles();
     this.bindDrawerButton();
     this.bindTabs();
     this.bindNexusEvents();
@@ -64,16 +63,16 @@ Major.createHost = function(){
     document.body.appendChild(this.host);
 };
 
-/* BLOCK: NEW UI STRUCTURE */
+/* BLOCK: UI STRUCTURE */
 
 Major.createUI = function(){
-    // SVG Icons for the sidebar
+    // Simplified Icons
     const ICONS = {
         overview: `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>`,
-        faction:  `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>`,
+        faction:  `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>`,
         enemy:    `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>`,
         chain:    `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M17 7h-4v2h4c1.65 0 3 1.35 3 3s-1.35 3-3 3h-4v2h4c2.76 0 5-2.24 5-5s-2.24-5-5-5zm-6 8H7c-1.65 0-3-1.35-3-3s1.35-3 3-3h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-2zm-3-4h8v2H8z"/></svg>`,
-        targets:  `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-3 13l-1-1 4-4-4-4 1-1 5 5-5 5z"/></svg>`, // Crosshair-ish
+        targets:  `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-3 13l-1-1 4-4-4-4 1-1 5 5-5 5z"/></svg>`,
         ai:       `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 14H4v-4h8v4zm0-6H4V8h8v4zm8 6h-6v-4h6v4zm0-6h-6V8h6v4z"/></svg>`,
         strategy: `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M3.5 18.49l6-6.01 4 4L22 6.92l-1.41-1.41-7.09 7.97-4-4L2 16.99z"/></svg>`,
         settings: `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>`
@@ -88,15 +87,15 @@ Major.createUI = function(){
             <div id="wnx-sidebar">
                 <div class="wnx-brand">WN</div>
                 <div class="wnx-nav">
-                    <button data-t="overview" class="active" title="Overview">${ICONS.overview}</button>
-                    <button data-t="faction" title="Faction">${ICONS.faction}</button>
-                    <button data-t="enemy" title="Enemy">${ICONS.enemy}</button>
-                    <button data-t="chain" title="Chain">${ICONS.chain}</button>
-                    <button data-t="targets" title="Targets">${ICONS.targets}</button>
-                    <button data-t="ai" title="AI Link">${ICONS.ai}</button>
-                    <button data-t="strategy" title="Strategy">${ICONS.strategy}</button>
+                    <button data-t="overview" class="active">${ICONS.overview}</button>
+                    <button data-t="faction">${ICONS.faction}</button>
+                    <button data-t="enemy">${ICONS.enemy}</button>
+                    <button data-t="chain">${ICONS.chain}</button>
+                    <button data-t="targets">${ICONS.targets}</button>
+                    <button data-t="ai">${ICONS.ai}</button>
+                    <button data-t="strategy">${ICONS.strategy}</button>
                     <div class="spacer"></div>
-                    <button data-t="settings" title="Settings">${ICONS.settings}</button>
+                    <button data-t="settings">${ICONS.settings}</button>
                 </div>
             </div>
 
@@ -104,6 +103,7 @@ Major.createUI = function(){
                 <div class="wnx-header">
                     <div class="wnx-title">TACTICAL // <span id="wnx-tab-name">OVERVIEW</span></div>
                     <div class="wnx-status-led online"></div>
+                    <button id="wnx-close-mobile">X</button>
                 </div>
                 
                 <div id="wnx-panels">
@@ -122,6 +122,11 @@ Major.createUI = function(){
 
     this.drawer = this.shadow.querySelector("#wnx-drawer");
     this.btn = this.shadow.querySelector("#wnx-trigger");
+    
+    // Close button logic (Mobile specific)
+    this.shadow.querySelector("#wnx-close-mobile").onclick = () => {
+        this.drawer.classList.remove("open");
+    };
 };
 
 /* BLOCK: TACTICAL CSS ENGINE */
@@ -131,10 +136,10 @@ Major.applyTacticalStyles = function(){
     s.textContent = `
         :host {
             --bg-dark: #0a0b10;
-            --bg-panel: rgba(18, 20, 28, 0.95);
+            --bg-panel: rgba(18, 20, 28, 0.96);
             --border: #2a2f3a;
-            --primary: #00f3ff; /* Cyber Cyan */
-            --danger: #ff2a42; /* Tactical Red */
+            --primary: #00f3ff;
+            --danger: #ff2a42;
             --warning: #ffb800;
             --success: #00ff9d;
             --text-main: #e0e6ed;
@@ -147,10 +152,10 @@ Major.applyTacticalStyles = function(){
         /* --- TRIGGER BUTTON --- */
         #wnx-trigger {
             position: fixed;
-            bottom: 20px;
-            left: 20px;
-            width: 56px;
-            height: 56px;
+            bottom: 15px;
+            left: 15px;
+            width: 48px;
+            height: 48px;
             background: var(--bg-panel);
             border: 1px solid var(--primary);
             border-radius: 50%;
@@ -158,63 +163,60 @@ Major.applyTacticalStyles = function(){
             display: flex;
             align-items: center;
             justify-content: center;
-            box-shadow: 0 0 15px rgba(0, 243, 255, 0.2);
-            transition: all 0.2s ease;
-            z-index: 9999;
+            box-shadow: 0 0 10px rgba(0, 243, 255, 0.2);
+            z-index: 2147483647;
+            transition: transform 0.2s;
         }
-        #wnx-trigger:hover {
-            box-shadow: 0 0 25px rgba(0, 243, 255, 0.4);
-            transform: scale(1.05);
-        }
+        #wnx-trigger:active { transform: scale(0.9); }
         .wnx-trigger-inner {
             font-family: var(--font-mono);
             font-weight: 900;
             color: var(--primary);
-            font-size: 20px;
+            font-size: 18px;
         }
 
         /* --- DRAWER CONTAINER --- */
         #wnx-drawer {
             position: fixed;
             top: 0; left: 0;
-            width: 600px;
+            width: 350px; /* Default Compact Width */
+            max-width: 100vw;
             height: 100vh;
-            background: rgba(10, 11, 16, 0.85);
-            backdrop-filter: blur(12px);
+            background: rgba(10, 11, 16, 0.95);
+            backdrop-filter: blur(8px);
             border-right: 1px solid var(--border);
             display: flex;
             transform: translateX(-100%);
-            transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
             color: var(--text-main);
             font-family: var(--font-ui);
-            box-shadow: 10px 0 30px rgba(0,0,0,0.5);
+            box-shadow: 10px 0 30px rgba(0,0,0,0.7);
         }
         #wnx-drawer.open { transform: translateX(0); }
 
         /* --- SIDEBAR --- */
         #wnx-sidebar {
-            width: 64px;
+            width: 50px;
             background: var(--bg-dark);
             border-right: 1px solid var(--border);
             display: flex;
             flex-direction: column;
             align-items: center;
-            padding-top: 20px;
-            padding-bottom: 20px;
+            padding-top: 15px;
+            padding-bottom: 15px;
             z-index: 2;
         }
         .wnx-brand {
             font-family: var(--font-mono);
             font-weight: 900;
             color: var(--primary);
-            margin-bottom: 30px;
-            font-size: 14px;
-            letter-spacing: 2px;
+            margin-bottom: 20px;
+            font-size: 12px;
         }
         .wnx-nav {
             display: flex;
             flex-direction: column;
-            gap: 16px;
+            gap: 12px;
             width: 100%;
             flex: 1;
         }
@@ -223,25 +225,17 @@ Major.applyTacticalStyles = function(){
             border: none;
             color: var(--text-mute);
             cursor: pointer;
-            padding: 12px;
-            transition: 0.2s;
+            padding: 10px;
             position: relative;
         }
-        .wnx-nav button:hover { color: var(--text-main); }
         .wnx-nav button.active { color: var(--primary); }
         .wnx-nav button.active::after {
-            content: '';
-            position: absolute;
-            left: 0; top: 10%;
-            height: 80%;
-            width: 3px;
-            background: var(--primary);
-            box-shadow: 2px 0 8px var(--primary);
+            content: ''; position: absolute; left: 0; top: 15%; height: 70%; width: 2px; background: var(--primary);
         }
-        .wnx-nav svg { width: 22px; height: 22px; }
+        .wnx-nav svg { width: 20px; height: 20px; }
         .spacer { flex: 1; }
 
-        /* --- MAIN VIEWPORT --- */
+        /* --- VIEWPORT --- */
         #wnx-viewport {
             flex: 1;
             display: flex;
@@ -251,32 +245,30 @@ Major.applyTacticalStyles = function(){
         }
 
         .wnx-header {
-            height: 60px;
+            height: 48px;
             border-bottom: 1px solid var(--border);
             display: flex;
             align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
+            padding: 0 16px;
             background: rgba(10,11,16,0.6);
+            gap: 10px;
         }
         .wnx-title {
+            flex: 1;
             font-family: var(--font-mono);
-            font-size: 14px;
-            letter-spacing: 1px;
+            font-size: 12px;
             color: var(--text-mute);
-            text-transform: uppercase;
         }
         .wnx-title span { color: var(--primary); font-weight: bold; }
         
-        .wnx-status-led {
-            width: 8px; height: 8px;
-            border-radius: 50%;
-            background: var(--border);
-        }
-        .wnx-status-led.online {
-            background: var(--success);
-            box-shadow: 0 0 8px var(--success);
-            animation: pulse 2s infinite;
+        #wnx-close-mobile {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--danger);
+            font-family: var(--font-mono);
+            padding: 4px 8px;
+            cursor: pointer;
+            display: none; /* Hidden on desktop by default */
         }
 
         /* --- PANELS --- */
@@ -284,107 +276,87 @@ Major.applyTacticalStyles = function(){
             flex: 1;
             overflow-y: auto;
             position: relative;
+            padding: 0; 
         }
         .panel {
             display: none;
-            padding: 24px;
-            animation: fadeIn 0.3s ease;
+            padding: 16px;
+            animation: fadeIn 0.2s ease;
         }
         .panel.active { display: block; }
 
-        /* --- COMPONENTS & UTILS --- */
-        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        /* --- COMPACT COMPONENTS --- */
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         .card {
             background: rgba(255,255,255,0.03);
             border: 1px solid var(--border);
-            padding: 16px;
-            border-radius: 4px;
-            margin-bottom: 16px;
+            padding: 12px;
+            border-radius: 2px;
+            margin-bottom: 10px;
         }
         .card-header {
             font-family: var(--font-mono);
-            font-size: 11px;
+            font-size: 10px;
             color: var(--text-mute);
-            text-transform: uppercase;
-            margin-bottom: 12px;
+            margin-bottom: 8px;
             border-bottom: 1px solid rgba(255,255,255,0.05);
-            padding-bottom: 6px;
-            display: flex;
-            justify-content: space-between;
+            padding-bottom: 4px;
+            display: flex; justify-content: space-between;
         }
 
-        .stat-big {
-            font-size: 28px;
-            font-weight: 300;
-            color: var(--text-main);
-            font-family: var(--font-mono);
-        }
-        .stat-sub { font-size: 12px; color: var(--text-mute); margin-top: 4px; }
-        .text-primary { color: var(--primary); }
-        .text-danger { color: var(--danger); }
-        .text-warn { color: var(--warning); }
-        .text-success { color: var(--success); }
-
-        /* TABLES */
-        table { width: 100%; border-collapse: collapse; font-size: 13px; }
-        th { text-align: left; color: var(--text-mute); font-family: var(--font-mono); font-weight: normal; font-size: 11px; padding: 8px 4px; border-bottom: 1px solid var(--border); }
-        td { padding: 10px 4px; border-bottom: 1px solid rgba(255,255,255,0.05); color: var(--text-main); }
-        tr:last-child td { border-bottom: none; }
+        .stat-big { font-size: 20px; font-weight: 300; color: var(--text-main); font-family: var(--font-mono); }
+        .stat-sub { font-size: 10px; color: var(--text-mute); }
         
-        /* BARS & GAUGES */
-        .bar-bg { height: 4px; background: #1a1c24; width: 100%; margin-top: 8px; position: relative; overflow: hidden; }
+        /* TABLES */
+        table { width: 100%; border-collapse: collapse; font-size: 11px; }
+        th { text-align: left; color: var(--text-mute); font-family: var(--font-mono); font-weight: normal; font-size: 9px; padding: 6px 2px; border-bottom: 1px solid var(--border); }
+        td { padding: 8px 2px; border-bottom: 1px solid rgba(255,255,255,0.05); color: var(--text-main); }
+        
+        /* UTILS */
+        .bar-bg { height: 3px; background: #1a1c24; width: 100%; margin-top: 6px; overflow: hidden; }
         .bar-fill { height: 100%; background: var(--primary); width: 0%; transition: width 0.5s ease; }
-        .bar-fill.danger { background: var(--danger); }
-        .bar-fill.warn { background: var(--warning); }
-
+        
         /* AI TERMINAL */
         .terminal {
             background: #000;
             border: 1px solid #333;
-            padding: 12px;
+            padding: 8px;
             font-family: var(--font-mono);
-            font-size: 12px;
+            font-size: 10px;
             color: #ccc;
-            height: 300px;
+            height: 200px; /* Smaller height */
             overflow-y: auto;
         }
-        .term-line { margin-bottom: 4px; word-break: break-all; }
-        .term-prompt { color: var(--primary); margin-right: 8px; }
-        .term-input {
-            width: 100%;
-            background: transparent;
-            border: none;
-            border-top: 1px solid #333;
-            color: var(--primary);
-            font-family: var(--font-mono);
-            padding: 12px;
-            outline: none;
-        }
+        .term-input { width: 100%; background: transparent; border: none; border-top: 1px solid #333; color: var(--primary); font-family: var(--font-mono); padding: 8px; outline: none; font-size: 11px; }
 
-        /* ANIMATIONS */
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes pulse { 0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; } }
-
-        /* SCROLLBAR */
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: var(--bg-dark); }
-        ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: var(--primary); }
-        
         /* BUTTONS */
         .btn-tac {
             background: rgba(255,255,255,0.05);
             border: 1px solid var(--border);
             color: var(--text-main);
-            padding: 8px 16px;
+            padding: 8px 10px;
             font-family: var(--font-mono);
-            font-size: 12px;
+            font-size: 10px;
             cursor: pointer;
-            transition: 0.2s;
             text-transform: uppercase;
+            text-align: center;
         }
-        .btn-tac:hover { background: rgba(0, 243, 255, 0.1); border-color: var(--primary); color: var(--primary); }
         .btn-tac.active { background: var(--primary); color: #000; border-color: var(--primary); font-weight: bold; }
+
+        /* --- MOBILE RESPONSIVENESS --- */
+        @media (max-width: 480px) {
+            #wnx-drawer { width: 100%; border-right: none; }
+            .grid-2 { grid-template-columns: 1fr; } /* Stack grids */
+            #wnx-close-mobile { display: block; }
+            .hide-mobile { display: none; } /* Helper to hide columns */
+            .card { margin-bottom: 8px; padding: 10px; }
+            .panel { padding: 12px; }
+            .stat-big { font-size: 18px; }
+        }
+
+        /* ANIMATIONS */
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes pulse { 0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; } }
     `;
     this.shadow.appendChild(s);
 };
@@ -484,17 +456,12 @@ Major.renderActiveTab = function(){
 
 Major.healthBar = function(curr, max){
     const pct = Math.min(100, Math.max(0, (curr / max) * 100));
-    let colorClass = "success"; // CSS var driven
-    if(pct < 50) colorClass = "warn";
-    if(pct < 25) colorClass = "danger";
-    
-    // We use inline styles for the width, classes for color
     let colorHex = "var(--success)";
     if(pct < 50) colorHex = "var(--warning)";
     if(pct < 25) colorHex = "var(--danger)";
 
     return `
-        <div style="font-size:10px; display:flex; justify-content:space-between; margin-bottom:2px;">
+        <div style="font-size:9px; display:flex; justify-content:space-between; margin-bottom:2px;">
             <span>HP</span> <span>${curr}/${max}</span>
         </div>
         <div class="bar-bg">
@@ -504,16 +471,15 @@ Major.healthBar = function(curr, max){
 };
 
 Major.gauge = function(label, value){
-    // Value 0.0 to 1.0
     const pct = Math.round(value * 100);
     let color = "var(--success)";
     if (value > 0.4) color = "var(--warning)";
     if (value > 0.7) color = "var(--danger)";
     
     return `
-        <div style="text-align:center; padding: 8px; border:1px solid rgba(255,255,255,0.05); background:rgba(0,0,0,0.2);">
-            <div style="font-size:20px; font-weight:bold; color:${color}; font-family:var(--font-mono);">${pct}%</div>
-            <div style="font-size:10px; color:var(--text-mute); text-transform:uppercase;">${label}</div>
+        <div style="text-align:center; padding: 6px; border:1px solid rgba(255,255,255,0.05); background:rgba(0,0,0,0.2);">
+            <div style="font-size:16px; font-weight:bold; color:${color}; font-family:var(--font-mono);">${pct}%</div>
+            <div style="font-size:9px; color:var(--text-mute); text-transform:uppercase;">${label}</div>
         </div>
     `;
 };
@@ -523,11 +489,11 @@ Major.statusBadge = function(status){
     let col = "var(--text-mute)";
     let bg = "rgba(255,255,255,0.05)";
     
-    if(status.includes("hospital")) { col = "var(--danger)"; bg = "rgba(255,42,66,0.1)"; }
-    else if(status.includes("okay")) { col = "var(--success)"; bg = "rgba(0,255,157,0.1)"; }
-    else if(status.includes("travel")) { col = "var(--primary)"; bg = "rgba(0,243,255,0.1)"; }
+    if(status.includes("hospital")) { col = "var(--danger)"; bg = "rgba(255,42,66,0.15)"; }
+    else if(status.includes("okay")) { col = "var(--success)"; bg = "rgba(0,255,157,0.15)"; }
+    else if(status.includes("travel")) { col = "var(--primary)"; bg = "rgba(0,243,255,0.15)"; }
     
-    return `<span style="padding:2px 6px; border-radius:3px; background:${bg}; color:${col}; font-size:10px; text-transform:uppercase;">${status}</span>`;
+    return `<span style="padding:1px 4px; border-radius:2px; background:${bg}; color:${col}; font-size:9px; text-transform:uppercase;">${status}</span>`;
 };
 
 /* BLOCK: OVERVIEW */
@@ -538,7 +504,7 @@ Major.renderOverview = function(){
     const a = this.data.ai || { threat:0, risk:0, aggression:0, instability:0, summary:[] };
     const c = this.data.chain || {};
     
-    if (!u.name) { p.innerHTML = `<div style="padding:20px; color:var(--text-mute);">Awaiting signal...</div>`; return; }
+    if (!u.name) { p.innerHTML = `<div style="padding:20px; color:var(--text-mute);">Signal Lost...</div>`; return; }
 
     const timeLeft = c.timeLeft ?? c.timeout ?? 0;
     
@@ -546,40 +512,38 @@ Major.renderOverview = function(){
         <div class="grid-2">
             <div class="card">
                 <div class="card-header">
-                    <span>OPERATOR</span>
-                    <span class="text-primary">LVL ${u.level}</span>
+                    <span>OP</span>
+                    <span class="text-primary">${u.level}</span>
                 </div>
-                <div style="margin-bottom:12px;">
+                <div style="margin-bottom:8px;">
                     <div class="stat-big">${u.name}</div>
-                    <div class="stat-sub">${this.statusBadge(u.status)}</div>
                 </div>
                 ${this.healthBar(u.hp || 0, u.max_hp || 1)}
             </div>
 
             <div class="card" style="border-color:${c.hits > 0 ? 'var(--primary)' : 'var(--border)'}">
                 <div class="card-header">
-                    <span>CHAIN LINK</span>
+                    <span>CHAIN</span>
                     <span style="${timeLeft < 30 ? 'color:var(--danger); animation:pulse 0.5s infinite;' : ''}">${timeLeft}s</span>
                 </div>
                 <div class="stat-big" style="color:${c.hits > 0 ? 'var(--primary)' : 'var(--text-mute)'}">${c.hits || 0}</div>
-                <div class="stat-sub">ACTIVE HITS</div>
             </div>
         </div>
 
         <div class="card">
-            <div class="card-header">TACTICAL ASSESSMENT</div>
-            <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:8px;">
-                ${this.gauge("Threat", a.threat)}
+            <div class="card-header">TACTICAL MATRIX</div>
+            <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:4px;">
+                ${this.gauge("Thrt", a.threat)}
                 ${this.gauge("Risk", a.risk)}
                 ${this.gauge("Aggr", a.aggression)}
-                ${this.gauge("Volat", a.instability)}
+                ${this.gauge("Vol", a.instability)}
             </div>
         </div>
 
         <div class="card">
-            <div class="card-header">INTELLIGENCE SUMMARY</div>
-            <div style="font-family:var(--font-mono); font-size:12px; color:var(--text-main); line-height:1.4;">
-                ${(a.summary && a.summary.length) ? a.summary.map(s => `<div>> ${s}</div>`).join('') : '<div style="color:var(--text-mute)">No anomalies detected. System stable.</div>'}
+            <div class="card-header">INTEL SUMMARY</div>
+            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-main); line-height:1.3;">
+                ${(a.summary && a.summary.length) ? a.summary.map(s => `<div>> ${s}</div>`).join('') : '<div style="color:var(--text-mute)">System Stable.</div>'}
             </div>
         </div>
     `;
@@ -593,7 +557,6 @@ Major.renderFaction = function(){
     
     if(!list.length) { p.innerHTML = "No Data"; return; }
     
-    // Sort: Online first
     list.sort((a,b) => (b.online ? 1 : 0) - (a.online ? 1 : 0));
 
     const rows = list.map(m => `
@@ -602,7 +565,7 @@ Major.renderFaction = function(){
             <td><b style="color:${m.online ? 'var(--text-main)' : 'var(--text-mute)'}">${m.name}</b></td>
             <td>${m.level}</td>
             <td>${this.statusBadge(m.status)}</td>
-            <td style="text-align:right; font-family:var(--font-mono); font-size:10px;">${m.last_action || ""}</td>
+            <td class="hide-mobile" style="text-align:right;">${m.last_action || ""}</td>
         </tr>
     `).join("");
 
@@ -610,10 +573,10 @@ Major.renderFaction = function(){
         <div class="card">
             <div class="card-header">
                 <span>ROSTER</span>
-                <span>${list.length} UNIT(S)</span>
+                <span>${list.length}</span>
             </div>
             <table>
-                <thead><tr><th width="10"></th><th>NAME</th><th>LVL</th><th>STATUS</th><th style="text-align:right">ACT</th></tr></thead>
+                <thead><tr><th width="5"></th><th>NAME</th><th>LVL</th><th>STATUS</th><th class="hide-mobile" style="text-align:right">ACT</th></tr></thead>
                 <tbody>${rows}</tbody>
             </table>
         </div>
@@ -642,10 +605,10 @@ Major.renderEnemy = function(){
         <div class="card" style="border-color:rgba(255,42,66,0.3);">
             <div class="card-header">
                 <span class="text-danger">HOSTILES</span>
-                <span>${list.length} DETECTED</span>
+                <span>${list.length}</span>
             </div>
             <table>
-                <thead><tr><th width="10"></th><th>NAME</th><th>LVL</th><th>STATUS</th><th style="text-align:right">VAL</th></tr></thead>
+                <thead><tr><th width="5"></th><th>NAME</th><th>LVL</th><th>STATUS</th><th style="text-align:right">VAL</th></tr></thead>
                 <tbody>${rows}</tbody>
             </table>
         </div>
@@ -664,7 +627,7 @@ Major.renderChain = function(){
             <div class="card-header">CHAIN METRICS</div>
             <div class="grid-2">
                 <div>
-                    <div class="stat-sub">CURRENT COUNT</div>
+                    <div class="stat-sub">HITS</div>
                     <div class="stat-big text-primary">${c.hits || 0}</div>
                 </div>
                 <div>
@@ -672,13 +635,13 @@ Major.renderChain = function(){
                     <div class="stat-big" style="color:${timeLeft < 30 ? 'var(--danger)' : 'var(--text-main)'}">${timeLeft}s</div>
                 </div>
             </div>
-            <div class="bar-bg" style="height:8px; margin-top:16px;">
+            <div class="bar-bg" style="height:6px; margin-top:12px;">
                  <div class="bar-fill" style="width:${Math.min(100, (timeLeft/300)*100)}%; background:${timeLeft < 60 ? 'var(--danger)' : 'var(--primary)'}"></div>
             </div>
         </div>
         <div class="card">
-            <div class="card-header">PACE ANALYSIS</div>
-            <div id="wnx-chain-graph" style="height:150px; position:relative;"></div>
+            <div class="card-header">PACE GRAPH</div>
+            <div id="wnx-chain-graph" style="height:120px; position:relative;"></div>
         </div>
     `;
 };
@@ -691,10 +654,10 @@ Major.renderTargets = function(){
     const list = this.data.targets[sub] || [];
 
     const btns = `
-        <div style="display:flex; gap:8px; margin-bottom:16px;">
-            <button class="btn-tac ${sub==='personal'?'active':''}" id="tgt-p">Personal</button>
-            <button class="btn-tac ${sub==='war'?'active':''}" id="tgt-w">War</button>
-            <button class="btn-tac ${sub==='shared'?'active':''}" id="tgt-s">Shared</button>
+        <div style="display:flex; gap:4px; margin-bottom:12px;">
+            <button class="btn-tac ${sub==='personal'?'active':''}" id="tgt-p" style="flex:1">Me</button>
+            <button class="btn-tac ${sub==='war'?'active':''}" id="tgt-w" style="flex:1">War</button>
+            <button class="btn-tac ${sub==='shared'?'active':''}" id="tgt-s" style="flex:1">Share</button>
         </div>
     `;
 
@@ -703,7 +666,7 @@ Major.renderTargets = function(){
             <td><b style="color:var(--primary)">${t.name}</b></td>
             <td>${t.level || "?"}</td>
             <td>${this.statusBadge(t.status)}</td>
-            <td style="text-align:right; font-family:var(--font-mono); font-size:10px;">
+            <td class="hide-mobile" style="text-align:right;">
                 ${t.timestamp ? new Date(t.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '-'}
             </td>
         </tr>
@@ -713,8 +676,8 @@ Major.renderTargets = function(){
         ${btns}
         <div class="card">
             <table>
-                <thead><tr><th>TARGET</th><th>LVL</th><th>STATUS</th><th style="text-align:right">SEEN</th></tr></thead>
-                <tbody>${list.length ? rows : '<tr><td colspan="4" style="text-align:center; padding:20px; color:var(--text-mute)">NO TARGETS DESIGNATED</td></tr>'}</tbody>
+                <thead><tr><th>TARGET</th><th>LVL</th><th>STATUS</th><th class="hide-mobile" style="text-align:right">SEEN</th></tr></thead>
+                <tbody>${list.length ? rows : '<tr><td colspan="4" style="text-align:center; padding:10px; color:var(--text-mute)">EMPTY</td></tr>'}</tbody>
             </table>
         </div>
     `;
@@ -728,17 +691,16 @@ Major.renderTargets = function(){
 
 Major.renderAIConsole = function(){
     const p = this.shadow.querySelector("#p-ai");
-    // Preserve log if rerendering
     const existingLog = p.querySelector("#wnx-ai-log"); 
-    const logHTML = existingLog ? existingLog.innerHTML : `<div class="term-line">> Uplink Established.</div><div class="term-line">> Colonel AI Online. Waiting for input...</div>`;
+    const logHTML = existingLog ? existingLog.innerHTML : `<div class="term-line">> Uplink... OK</div>`;
 
     p.innerHTML = `
         <div class="card" style="padding:0; overflow:hidden; border:1px solid var(--border);">
-            <div class="card-header" style="margin:0; padding:10px; background:#111;">SECURE UPLINK // COLONEL</div>
+            <div class="card-header" style="margin:0; padding:8px; background:#111;">COLONEL UPLINK</div>
             <div id="wnx-ai-log" class="terminal">${logHTML}</div>
             <div style="display:flex; background:#000; padding:0;">
-                <span style="padding:12px 0 12px 12px; color:var(--primary); font-family:var(--font-mono);">></span>
-                <input id="wnx-ai-input" class="term-input" placeholder="Enter command..." autocomplete="off">
+                <span style="padding:8px 0 8px 8px; color:var(--primary); font-family:var(--font-mono);">></span>
+                <input id="wnx-ai-input" class="term-input" placeholder="Command..." autocomplete="off">
             </div>
         </div>
     `;
@@ -783,22 +745,22 @@ Major.renderStrategy = function(){
     
     p.innerHTML = `
         <div class="card">
-            <div class="card-header">COMBAT DOCTRINE</div>
-            <div style="display:flex; gap:8px;">
-                <button class="btn-tac ${m==='OFFENSIVE'?'active':''}" style="flex:1" id="m-off">Offensive</button>
-                <button class="btn-tac ${m==='DEFENSIVE'?'active':''}" style="flex:1" id="m-def">Defensive</button>
-                <button class="btn-tac ${m==='HYBRID'?'active':''}" style="flex:1" id="m-hyb">Hybrid</button>
+            <div class="card-header">MODE</div>
+            <div style="display:flex; gap:4px;">
+                <button class="btn-tac ${m==='OFFENSIVE'?'active':''}" style="flex:1" id="m-off">ATK</button>
+                <button class="btn-tac ${m==='DEFENSIVE'?'active':''}" style="flex:1" id="m-def">DEF</button>
+                <button class="btn-tac ${m==='HYBRID'?'active':''}" style="flex:1" id="m-hyb">HYB</button>
             </div>
         </div>
         
         <div class="card">
-            <div class="card-header">TEMPORAL ANALYSIS (HEATMAP)</div>
-            <div id="wnx-heatmap" style="height:120px; background:#111;"></div>
+            <div class="card-header">HEATMAP</div>
+            <div id="wnx-heatmap" style="height:100px; background:#111;"></div>
         </div>
         
         <div class="card">
-            <div class="card-header">CONFLICT INTENSITY</div>
-            <div id="wnx-strategy-war-graph" style="height:140px;"></div>
+            <div class="card-header">INTENSITY</div>
+            <div id="wnx-strategy-war-graph" style="height:100px;"></div>
         </div>
     `;
 
@@ -819,22 +781,22 @@ Major.renderSettings = function(){
     const p = this.shadow.querySelector("#p-settings");
     p.innerHTML = `
         <div class="card">
-            <div class="card-header">INTERFACE CONFIG</div>
-            <button class="btn-tac" style="width:100%; margin-bottom:8px;" id="s-det">
-                ${this.detached ? 'Dock Window' : 'Detach Window'}
+            <div class="card-header">CONFIG</div>
+            <button class="btn-tac" style="width:100%; margin-bottom:6px;" id="s-det">
+                ${this.detached ? 'Dock' : 'Detach'}
             </button>
-            <button class="btn-tac" style="width:100%; margin-bottom:8px;" id="s-side">
-                Switch Side (${this.attachedSide.toUpperCase()})
+            <button class="btn-tac" style="width:100%; margin-bottom:6px;" id="s-side">
+                Side (${this.attachedSide.toUpperCase()})
             </button>
             <button class="btn-tac" style="width:100%;" id="s-scl">
-                UI Scale: ${(this.dataScale || 1).toFixed(1)}x
+                Scale: ${(this.dataScale || 1).toFixed(1)}x
             </button>
         </div>
         
         <div class="card" style="border-color:var(--danger);">
-            <div class="card-header text-danger">DANGER ZONE</div>
+            <div class="card-header text-danger">RESET</div>
             <button class="btn-tac" style="width:100%; border-color:var(--danger); color:var(--danger);" id="s-rst">
-                Purge AI Memory
+                Purge Memory
             </button>
         </div>
     `;
@@ -843,7 +805,7 @@ Major.renderSettings = function(){
         this.detached = !this.detached;
         if(this.detached) {
             this.drawer.style.position = "absolute";
-            this.drawer.style.height = "600px";
+            this.drawer.style.height = "500px";
             this.drawer.style.top = "50px";
             this.drawer.style.left = "50px";
             this.drawer.style.border = "1px solid var(--primary)";
@@ -868,15 +830,14 @@ Major.renderSettings = function(){
             this.drawer.style.right = "0";
             this.drawer.style.borderRight = "none";
             this.drawer.style.borderLeft = "1px solid var(--border)";
-            // trigger also moves
             this.btn.style.left = "auto";
-            this.btn.style.right = "20px";
+            this.btn.style.right = "15px";
         } else {
             this.drawer.style.left = "0";
             this.drawer.style.right = "auto";
             this.drawer.style.borderLeft = "none";
             this.drawer.style.borderRight = "1px solid var(--border)";
-            this.btn.style.left = "20px";
+            this.btn.style.left = "15px";
             this.btn.style.right = "auto";
         }
         this.renderSettings();
@@ -909,16 +870,14 @@ Major.renderChainGraph = function(){
     this.ensureChart(() => {
         const container = this.shadow.querySelector("#wnx-chain-graph");
         if (!container) return;
-        
-        // Prevent destroy/recreate spam by checking if canvas exists
-        if(container.querySelector("canvas")) return; // Simple optimization
+        if(container.querySelector("canvas")) return;
 
         container.innerHTML = `<canvas></canvas>`;
         const ctx = container.querySelector("canvas").getContext("2d");
         const pace = (this.data.aiMemory.chain || {}).pace || [];
 
         if (!pace.length) {
-            ctx.fillStyle = "#555"; ctx.font="12px monospace";
+            ctx.fillStyle = "#555"; ctx.font="10px monospace";
             ctx.fillText("NO DATA", 10, 20); return;
         }
 
@@ -931,7 +890,7 @@ Major.renderChainGraph = function(){
                     data: pace.map(p => p.hits),
                     borderColor: "#00f3ff",
                     backgroundColor: "rgba(0, 243, 255, 0.1)",
-                    borderWidth: 2,
+                    borderWidth: 1.5,
                     tension: 0.3,
                     pointRadius: 0,
                     fill: true
@@ -943,7 +902,7 @@ Major.renderChainGraph = function(){
                 plugins: { legend: { display: false } },
                 scales: {
                     x: { display: false },
-                    y: { grid: { color: "#222" }, ticks: { color: "#666" } }
+                    y: { grid: { color: "#222" }, ticks: { color: "#666", font:{size:9} } }
                 }
             }
         });
@@ -985,7 +944,6 @@ Major.renderHeatmap = function(){
     const container = this.shadow.querySelector("#wnx-heatmap");
     if(!container) return;
     
-    // Manual Canvas Drawing for Heatmap (Performance)
     const canvas = document.createElement("canvas");
     canvas.width = container.clientWidth;
     canvas.height = container.clientHeight;
@@ -996,7 +954,6 @@ Major.renderHeatmap = function(){
     const w = canvas.width;
     const h = canvas.height;
     
-    // Grid Effect
     ctx.strokeStyle = "#222";
     ctx.lineWidth = 1;
     
@@ -1015,7 +972,6 @@ Major.renderHeatmap = function(){
     
     bins.forEach((val, i) => {
         const intensity = val / max;
-        // Cyber Green to Red gradient simulation
         const r = Math.floor(intensity * 255);
         const g = Math.floor((1-intensity) * 255);
         
@@ -1023,13 +979,6 @@ Major.renderHeatmap = function(){
         if(val === 0) ctx.fillStyle = "rgba(255,255,255,0.02)";
         
         ctx.fillRect(i * colW, 0, colW - 1, h);
-        
-        // Hour label
-        if(i % 3 === 0){
-            ctx.fillStyle = "#555";
-            ctx.font = "9px monospace";
-            ctx.fillText(`${i}h`, i*colW + 2, h - 5);
-        }
     });
 };
 
