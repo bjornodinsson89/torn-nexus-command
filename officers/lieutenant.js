@@ -19,174 +19,151 @@
 "use strict";
 
 const Lieutenant = {
-
-    general: null,
+    nexus: null,
     tick: 0,
     chainActive: false,
     chainTimeout: 0,
-
-    init(G) {
-        this.general = G;
-
-        WARDBG("Lieutenant v8.3 (API v2-first) ready.");
-
-        // Heartbeat — every 1s, adaptive
-        setInterval(() => {
-            if (!this.general.intel.hasCredentials()) return;
-
+    interval: null,
+    init(nexus) {
+        this.nexus = nexus;
+        this.start();
+    },
+    start() {
+        this.interval = setInterval(() => {
+            if (!this.nexus.intel.hasCredentials()) return;
             this.tick++;
             const rate = this.getRate();
-
             if (this.tick >= rate) {
                 this.tick = 0;
-                this.fetchIntel();
+                this.fetchAllIntel();
             }
         }, 1000);
     },
-
-    // Adaptive polling speed
     getRate() {
         if (this.chainActive && this.chainTimeout < 45) return 1;
         if (this.chainActive) return 3;
         return 12;
     },
-
-    // -------------------------
-    // MASTER INTEL FETCH (API v2)
-    // -------------------------
-    async fetchIntel() {
+    async fetchAllIntel() {
         try {
-            const RAW = await this.pullAllIntel();
-            this.general.signals.dispatch("RAW_INTEL", RAW);
-        } catch (err) {
-            WARDBG("Lieutenant ERROR: " + err);
+            const raw = await this.pullIntel();
+            this.nexus.events.emit("RAW_INTEL", raw);
+        } catch(e) {
+            this.nexus.log("Lieutenant ERROR: " + e);
         }
     },
+    async pullIntel() {
+        const userBasic = this.nexus.intel.requestV2("/user/basic");
+        const userStats = this.nexus.intel.requestV2("/user/battlestats");
+        const userBars = this.nexus.intel.requestV2("/user/bars");
+        const userStatus = this.nexus.intel.requestV2("/user/status");
+        const userChain = this.nexus.intel.requestV2("/user/chain");
+        const userFaction = this.nexus.intel.requestV2("/user/faction");
+        const userAttacks = this.nexus.intel.requestV2("/user/attacks");
 
-    // -------------------------
-    // MASTER INTEL ROUTINE
-    // -------------------------
-    async pullAllIntel() {
-
-        // -- PARALLEL USER v2 CALLS --
         const [
-            userBasic,           // /v2/user/basic
-            userStats,           // /v2/user/battlestats
-            userBars,            // /v2/user/bars
-            userState,           // /v2/user/status
-            userChain,           // /v2/user/chain
-            userAttacks,         // /v2/user/attacks
-            userFaction          // /v2/user/faction
+            basic,
+            stats,
+            bars,
+            state,
+            chain,
+            factionEntry,
+            attacks
         ] = await Promise.all([
-            this.v2("/user/basic"),
-            this.v2("/user/battlestats"),
-            this.v2("/user/bars"),
-            this.v2("/user/status"),
-            this.v2("/user/chain"),
-            this.v2("/user/attacks"),
-            this.v2("/user/faction")
+            userBasic,
+            userStats,
+            userBars,
+            userStatus,
+            userChain,
+            userFaction,
+            userAttacks
         ]);
 
-        const factionId = userFaction.faction?.faction_id || null;
+        const factionId = factionEntry?.faction?.faction_id || null;
 
-        // -- PULL OWN FACTION —
         let factionBasic = null;
         let factionMembers = null;
         let factionWars = null;
         let factionChain = null;
 
         if (factionId) {
-            [factionBasic, factionMembers, factionWars, factionChain] = await Promise.all([
-                this.v2(`/faction/${factionId}/basic`),
-                this.v2(`/faction/${factionId}/members`),
-                this.v2(`/faction/${factionId}/wars`),
-                this.v2(`/faction/${factionId}/chain`)
-            ]);
+            const fb = this.nexus.intel.requestV2(`/faction/${factionId}/basic`);
+            const fm = this.nexus.intel.requestV2(`/faction/${factionId}/members`);
+            const fw = this.nexus.intel.requestV2(`/faction/${factionId}/wars`);
+            const fc = this.nexus.intel.requestV2(`/faction/${factionId}/chain`);
+            const result = await Promise.all([fb, fm, fw, fc]);
+            factionBasic = result[0];
+            factionMembers = result[1];
+            factionWars = result[2];
+            factionChain = result[3];
         }
 
-        // -- Identify enemy factions in wars --
         const enemies = [];
-
         if (factionWars?.wars) {
             for (const wid in factionWars.wars) {
                 const war = factionWars.wars[wid];
                 const enemyId = war.enemy_faction || war.opponent || null;
-
                 if (!enemyId) continue;
-
-                const enemyMembers = await this.v2(`/faction/${enemyId}/members`)
-                    .catch(() => null);
-
+                const enemy = await this.nexus.intel.requestV2(`/faction/${enemyId}/members`).catch(()=>null);
                 enemies.push({
                     id: enemyId,
-                    name: enemyMembers?.name || "Unknown",
-                    members: enemyMembers?.members || {}
+                    name: enemy?.name || "Unknown",
+                    members: enemy?.members || {}
                 });
             }
         }
 
-        // -- Supplemental v1 calls (minimal) --
-        // Only pull what v2 *cannot* provide natively:
-        const supplemental = await this.general.intel.requestUser("networth")
-            .catch(() => ({ networth: null }));
+        let supplemental = {};
+        try {
+            supplemental = await this.nexus.intel.requestUserV1("networth");
+        } catch(e) {
+            supplemental = {};
+        }
 
-        // Update internal chain state (affects polling)
-        const c = userChain?.chain || {};
-        this.chainActive = c.hits > 0;
+        const c = chain?.chain || {};
+        this.chainActive = !!c.hits;
         this.chainTimeout = c.timeout || 0;
 
-        // Build RAW_INTEL
         return {
             timestamp: Date.now(),
-
             user: {
-                id: userBasic?.user_id,
-                name: userBasic?.name,
-                level: userBasic?.level,
-                gender: userBasic?.gender,
-                status: userState?.status,
-                last_action: userState?.last_action,
-                hp: userState?.hp?.current,
-                max_hp: userState?.hp?.maximum,
-                bars: userBars?.bars,
-                stats: userStats?.battlestats
+                id: basic?.user_id || null,
+                name: basic?.name || "",
+                level: basic?.level || 0,
+                gender: basic?.gender || "",
+                status: state?.status || "",
+                last_action: state?.last_action || {},
+                hp: state?.hp?.current || 0,
+                max_hp: state?.hp?.maximum || 0,
+                bars: bars?.bars || {},
+                stats: stats?.battlestats || {}
             },
-
             chain: {
-                hits: c.hits,
-                timeout: c.timeout,
-                cooldown: c.cooldown,
+                hits: c.hits || 0,
+                timeout: c.timeout || 0,
+                cooldown: c.cooldown || 0,
                 modifiers: c.modifiers || {},
                 full: c
             },
-
             faction: {
                 id: factionId,
-                name: factionBasic?.name,
-                founder: factionBasic?.founder,
-                respect: factionBasic?.respect,
+                name: factionBasic?.name || "",
+                founder: factionBasic?.founder || "",
+                respect: factionBasic?.respect || 0,
                 members: factionMembers?.members || {},
                 chain: factionChain?.chain || {},
                 wars: factionWars?.wars || {}
             },
-
             enemies,
-
-            attacks: userAttacks?.attacks || [],
+            attacks: attacks?.attacks || [],
             supplemental
         };
-    },
-
-    // -------------------------
-    // v2 API helper
-    // -------------------------
-    async v2(path, params = {}) {
-        return this.general.intel.requestV2(path, params);
     }
 };
 
-if (typeof WAR_GENERAL !== "undefined") {
-    WAR_GENERAL.register("Lieutenant", Lieutenant);
-}
+/* BLOCK: SELF REGISTRATION */
+
+window.__NEXUS_OFFICERS = window.__NEXUS_OFFICERS || [];
+window.__NEXUS_OFFICERS.push({ name: "Lieutenant", module: Lieutenant });
 
 })();
