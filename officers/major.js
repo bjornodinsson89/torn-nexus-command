@@ -5,711 +5,424 @@
 // Receives SITREP from Colonel via WAR_GENERAL.signals.
 ////////////////////////////////////////////////////////////
 
-(function(){
+(function() {
+"use strict";
 
-function dbg(msg){
-    if (typeof window.WARDBG === "function"){
-        window.WARDBG(msg);
-    }
-}
+class Major {
+    constructor() {
+        this.general = null;
 
-class MajorState {
-    constructor(){
-        this.user = null;
-        this.chain = { hits:0, timeLeft:0, momentum:0, collapseRisk:0 };
-        this.friendlyFaction = null;
-        this.enemyFaction = null;
-        this.enemyMembers = [];
-       	this.friendlyMembers = [];
-        this.ai = { threat:0, risk:0, tempo:0, instability:0 };
-        this.sharedTargets = [];
-        this.activityFriendly = Array(30).fill(0);
-        this.activityEnemy = Array(30).fill(0);
-        this.intelLog = [];
-        this.strategy = "";
-        this.forecast = {
-            enemySurge: 0,
-            collapseProb: 0,
-            peakWindow: "Unknown",
-            enemyShift: [],
-        };
-        this.matrix = {
-            enemies: [],
-            statsReady: false
-        };
-    }
-
-    updateFromSitrep(s){
-        if (s.user) this.user = s.user;
-        if (s.chain) this.chain = s.chain;
-        if (s.friendlyFaction) this.friendlyFaction = s.friendlyFaction;
-        if (s.enemyFaction) this.enemyFaction = s.enemyFaction;
-        if (Array.isArray(s.enemyMembers)) this.enemyMembers = s.enemyMembers;
-        if (Array.isArray(s.friendlyMembers)) this.friendlyMembers = s.friendlyMembers;
-        if (s.ai) this.ai = s.ai;
-        if (Array.isArray(s.sharedTargets)) this.sharedTargets = s.sharedTargets;
-        if (Array.isArray(s.activityFriendly)) this.activityFriendly = s.activityFriendly;
-        if (Array.isArray(s.activityEnemy)) this.activityEnemy = s.activityEnemy;
-
-        const ts = Date.now();
-        this.intelLog.push({
-            timestamp: ts,
-            chain: this.chain.hits,
-            threat: this.ai.threat || 0,
-            risk: this.ai.risk || 0,
-            onlineEnemy: this.enemyMembers.filter(m=>m.online).length
-        });
-        if (this.intelLog.length > 200) this.intelLog.shift();
-
-        this.computeStrategySummary();
-        this.computeForecast();
-        this.computeThreatMatrix();
-    }
-
-    computeStrategySummary(){
-        const t = this.ai.threat || 0;
-        const r = this.ai.risk || 0;
-        const c = this.chain.collapseRisk || 0;
-        let summary = "";
-
-        if (t > 0.75 && r > 0.75){
-            summary = "ENEMY DOMINANT — Defensive posture advised.";
-        } else if (t > 0.7 && c > 60){
-            summary = "CHAIN AT RISK — Consider controlled resets.";
-        } else if (t < 0.4 && r < 0.4){
-            summary = "FAVORABLE CONDITIONS — Optimal attack window.";
-        } else if (t < 0.3 && c < 30){
-            summary = "ENEMY WEAK — Exploit vulnerability.";
-        } else {
-            summary = "NEUTRAL CONDITIONS — Maintain tempo.";
-        }
-
-        this.strategy = summary;
-    }
-
-    computeForecast(){
-        const online30 = this.activityEnemy.slice(-30);
-        const recent = this.activityEnemy.slice(-5);
-        const old = this.activityEnemy.slice(-15, -10);
-
-        let surge = 0;
-        if (recent.length >= 3 && old.length >= 3){
-            const rAvg = recent.reduce((a,b)=>a+b,0)/recent.length;
-            const oAvg = old.reduce((a,b)=>a+b,0)/old.length;
-            surge = Math.max(0, Math.min(1, (rAvg - oAvg) / 10));
-        }
-
-        const collapseProb = Math.min(1, (this.chain.collapseRisk || 0) / 100);
-
-        const windows = [];
-        for (let i=0; i<online30.length; i++){
-            windows.push({ idx:i, val:online30[i] });
-        }
-        windows.sort((a,b)=>a.val - b.val);
-        const peakIdx = windows.length > 0 ? windows[windows.length-1].idx : 0;
-
-        const onlineDiff = [];
-        for (let i=1; i<online30.length; i++){
-            onlineDiff.push(online30[i] - online30[i-1]);
-        }
-
-        this.forecast = {
-            enemySurge: surge,
-            collapseProb,
-            peakWindow: `T-${30 - peakIdx}m`,
-            enemyShift: onlineDiff
-        };
-    }
-
-    computeThreatMatrix(){
-        if (!this.enemyMembers || this.enemyMembers.length === 0){
-            this.matrix = { enemies:[], statsReady:false };
-            return;
-        }
-
-        const list = this.enemyMembers.map(m=>{
-            const last = m.last_action || 0;
-            const idle = Date.now() - last;
-            const online = idle < 600000 ? 1 : 0;
-            const threat = m.threat || 0;
-            const level = m.level || 0;
-            const combined = Math.min(1, (0.5*threat) + (0.3*(level/100)) + (0.2*online));
-
-            return {
-                id: m.id,
-                name: m.name,
-                level: level,
-                threat: threat,
-                combined: combined,
-                online: online === 1
-            };
-        });
-
-        list.sort((a,b)=>b.combined - a.combined);
-
-        this.matrix = {
-            enemies: list,
-            statsReady: true
-        };
-    }
-}
-
-class MajorUI {
-    constructor(general){
-        this.general = general;
-        this.state = new MajorState();
-        this.visible = false;
+        this.host = null;
         this.shadow = null;
-        this.root = null;
+        this.drawerEl = null;
+        this.drawerOpen = false;
+        this.activeTab = "overview";
 
-        this.initFrame();
+        this.store = {
+            user: null,
+            chain: null,
+            faction: [],
+            enemies: [],
+            targets: { personal: [], war: [], shared: [] },
+            ai: null
+        };
+
+        this.targetSubTab = "personal";
+    }
+
+    // ----------------------------------------------------------
+    // INIT
+    // ----------------------------------------------------------
+    init(G) {
+        this.general = G;
+
+        this.createHost();
         this.renderBase();
-        this.cacheRoots();
-        this.attachEvents();
-        this.registerSitrepListener();
+        this.renderStyles();
+        this.bindTabs();
+        this.bindDrawer();
+        this.bindSignals();
 
-        dbg("MajorUI constructed (War Dashboard Style C)");
+        this.renderPanel();
     }
 
-    initFrame(){
-        const host = document.createElement("div");
-        host.id = "nexus-major-root";
-        host.style.position = "fixed";
-        host.style.top = "0";
-        host.style.left = "0";
-        host.style.zIndex = "2147483647";
-        host.style.pointerEvents = "none";
+    // ----------------------------------------------------------
+    // SIGNAL HANDLERS
+    // ----------------------------------------------------------
+    bindSignals() {
+        this.general.signals.listen("SITREP_UPDATE", data => {
+            if (data.user) this.store.user = data.user;
+            if (data.chain) this.store.chain = data.chain;
+            if (data.factionMembers) this.store.faction = data.factionMembers;
+            if (data.enemyFactionMembers) this.store.enemies = data.enemyFactionMembers;
+            if (data.targets) this.store.targets = data.targets;
+            if (data.ai) this.store.ai = data.ai;
 
-        this.shadow = host.attachShadow({ mode:"open" });
-        document.body.appendChild(host);
+            this.renderPanel();
+        });
+
+        this.general.signals.listen("SHARED_TARGETS_UPDATED", list => {
+            this.store.targets.shared = list || [];
+            if (this.activeTab === "targets") this.renderTargets();
+        });
+
+        this.general.signals.listen("ASK_COLONEL_RESPONSE", d => {
+            const w = this.shadow.querySelector("#ai-log");
+            if (w && d.answer) {
+                const msg = document.createElement("div");
+                msg.className = "ai-msg";
+                msg.textContent = d.answer;
+                w.appendChild(msg);
+                w.scrollTop = w.scrollHeight;
+            }
+        });
     }
 
-    renderBase(){
+    // ----------------------------------------------------------
+    // UI CONSTRUCTION
+    // ----------------------------------------------------------
+    createHost() {
+        if (document.getElementById("nexus-major-host")) return;
+
+        this.host = document.createElement("div");
+        this.host.id = "nexus-major-host";
+        this.host.style.position = "fixed";
+        this.host.style.top = "0";
+        this.host.style.left = "0";
+        this.host.style.zIndex = "2147483647";
+
+        this.shadow = this.host.attachShadow({ mode: "open" });
+        document.body.appendChild(this.host);
+    }
+
+    renderBase() {
         this.shadow.innerHTML = `
-            <style>
-                :host { all: initial; }
-
-                #toggleBtn {
-                    position: fixed;
-                    bottom: 20px;
-                    left: 20px;
-                    width: 65px;
-                    height: 65px;
-                    border-radius: 50%;
-                    background: #001017;
-                    color: #00ffff;
-                    border: 2px solid #00cccc;
-                    font-size: 14px;
-                    font-family: monospace;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    cursor: pointer;
-                    pointer-events: auto;
-                    box-shadow: 0 0 12px #00ffff;
-                    transition: transform 0.2s ease;
-                }
-
-                #toggleBtn:hover {
-                    transform: scale(1.08);
-                }
-
-                #panel {
-                    position: fixed;
-                    top: 0;
-                    left: 0;
-                    width: 420px;
-                    height: 100vh;
-                    background: #000000;
-                    border-right: 2px solid #00ffff;
-                    transform: translateX(-100%);
-                    transition: all 0.30s ease;
-                    color: #00ffff;
-                    font-family: monospace;
-                    pointer-events: auto;
-                    overflow-y: auto;
-                    padding-bottom: 40px;
-                }
-
-                #panel.visible {
-                    transform: translateX(0);
-                }
-
-                #tabs {
-                    display: flex;
-                    border-bottom: 1px solid #00cccc;
-                }
-
-                .tabBtn {
-                    flex: 1;
-                    padding: 8px;
-                    text-align: center;
-                    cursor: pointer;
-                    background: #000;
-                    border-right: 1px solid #003344;
-                    color: #00ffff;
-                    font-size: 12px;
-                }
-
-                .tabBtn.active {
-                    background: #002833;
-                    font-weight: bold;
-                }
-
-                .tabContent {
-                    display: none;
-                    padding: 10px;
-                }
-
-                .tabContent.active {
-                    display: block;
-                }
-
-                .section {
-                    margin-bottom: 12px;
-                    border: 1px solid #00cccc;
-                    padding: 6px;
-                    background: #000910;
-                }
-
-                canvas {
-                    width: 100%;
-                    height: 140px;
-                    background: #000;
-                    border: 1px solid #00cccc;
-                }
-
-                table {
-                    width: 100%;
-                    border-collapse: collapse;
-                    font-size: 12px;
-                    color: #00ffff;
-                }
-
-                th, td {
-                    border-bottom: 1px solid #003344;
-                    padding: 4px;
-                    text-align: left;
-                }
-
-                .ok { color: #00ff66; }
-                .danger { color: #ff0033; }
-                .warn { color: #ffcc00; }
-
-                .matrix-row {
-                    display:flex;
-                    justify-content:space-between;
-                    border-bottom:1px solid #003344;
-                    padding:4px;
-                }
-
-                .intelLogEntry {
-                    border-bottom: 1px dashed #003344;
-                    padding: 4px;
-                    font-size: 11px;
-                }
-
-                .targetRow {
-                    display:flex;
-                    justify-content:space-between;
-                    padding:4px;
-                    border-bottom:1px solid #003344;
-                }
-
-                #addTargetBtn {
-                    width:100%;
-                    padding:6px;
-                    margin-top:8px;
-                    background:#001822;
-                    border:1px solid #00cccc;
-                    color:#00ffff;
-                    cursor:pointer;
-                }
-
-                #intelTerminal {
-                    width:100%;
-                    height:200px;
-                    background:#000;
-                    border:1px solid #00cccc;
-                    color:#00ff99;
-                    font-size:11px;
-                    overflow-y:auto;
-                    padding:6px;
-                    font-family:monospace;
-                }
-            </style>
-
-            <div id="toggleBtn">WAR</div>
-
-            <div id="panel">
+            <div id="btn">N</div>
+            <div id="drawer">
                 <div id="tabs">
-                    <div class="tabBtn active" data-tab="overviewTab">Overview</div>
-                    <div class="tabBtn" data-tab="enemyTab">Enemies</div>
-                    <div class="tabBtn" data-tab="targetsTab">Targets</div>
-                    <div class="tabBtn" data-tab="activityTab">Activity</div>
-                    <div class="tabBtn" data-tab="matrixTab">Matrix</div>
-                    <div class="tabBtn" data-tab="terminalTab">Terminal</div>
+                    <button data-t="overview" class="on">OVERVIEW</button>
+                    <button data-t="faction">FACTION</button>
+                    <button data-t="enemy">ENEMIES</button>
+                    <button data-t="chain">CHAIN</button>
+                    <button data-t="targets">TARGETS</button>
+                    <button data-t="ai">AI</button>
                 </div>
 
-                <div id="overviewTab" class="tabContent active"></div>
-                <div id="enemyTab" class="tabContent"></div>
-                <div id="targetsTab" class="tabContent"></div>
-                <div id="activityTab" class="tabContent"></div>
-                <div id="matrixTab" class="tabContent"></div>
-                <div id="terminalTab" class="tabContent"></div>
+                <div id="panels">
+                    <div id="p-overview" class="panel on"></div>
+                    <div id="p-faction" class="panel"></div>
+                    <div id="p-enemy" class="panel"></div>
+                    <div id="p-chain" class="panel"></div>
+                    <div id="p-targets" class="panel"></div>
+                    <div id="p-ai" class="panel"></div>
+                </div>
             </div>
         `;
     }
 
-    cacheRoots(){
-        this.root = {
-            toggleBtn: this.shadow.querySelector("#toggleBtn"),
-            panel: this.shadow.querySelector("#panel"),
-            tabs: this.shadow.querySelectorAll(".tabBtn"),
-            overviewTab: this.shadow.querySelector("#overviewTab"),
-            enemyTab: this.shadow.querySelector("#enemyTab"),
-            targetsTab: this.shadow.querySelector("#targetsTab"),
-            activityTab: this.shadow.querySelector("#activityTab"),
-            matrixTab: this.shadow.querySelector("#matrixTab"),
-            terminalTab: this.shadow.querySelector("#terminalTab")
-        };
+    renderStyles() {
+        const s = document.createElement("style");
+        s.textContent = `
+            :host { all: initial; }
+
+            #btn {
+                position: fixed;
+                bottom:20px; left:20px;
+                width:50px; height:50px;
+                background:#000;
+                border:2px solid #00f3ff;
+                border-radius:50%;
+                color:#00f3ff;
+                display:flex;
+                align-items:center;
+                justify-content:center;
+                cursor:pointer;
+                z-index:9999;
+                font-size:20px;
+                font-family:Arial, sans-serif;
+            }
+
+            #drawer {
+                position: fixed;
+                top:0; left:0;
+                width:380px; height:100vh;
+                background:#050505;
+                color:#00f3ff;
+                transform: translateX(-100%);
+                transition:0.3s;
+                border-right:2px solid #00f3ff;
+                z-index:9998;
+                overflow-y:auto;
+                font-family:Arial, sans-serif;
+            }
+
+            #drawer.on {
+                transform: translateX(0);
+            }
+
+            #tabs {
+                display:flex;
+                border-bottom:1px solid #00f3ff;
+            }
+            #tabs button {
+                flex:1;
+                background:#000;
+                color:#00f3ff;
+                padding:10px;
+                border:none;
+                cursor:pointer;
+            }
+            #tabs button.on {
+                background:#00f3ff;
+                color:#000;
+            }
+
+            .panel {
+                display:none; padding:10px;
+            }
+            .panel.on { display:block; }
+
+            table {
+                width:100%;
+                border-collapse: collapse;
+                font-size:13px;
+                color:#fff;
+            }
+            td, th {
+                padding:4px;
+                border-bottom:1px solid #222;
+            }
+
+            #ai-log {
+                background:#111;
+                color:#0ff;
+                height:260px;
+                overflow-y:auto;
+                padding:10px;
+                margin-bottom:8px;
+                border:1px solid #00f3ff;
+                font-family: monospace;
+                font-size: 12px;
+            }
+            .ai-msg { margin-bottom:6px; }
+
+            input.ai-cmd {
+                width:100%; padding:8px;
+                background:#000;
+                border:1px solid #00f3ff;
+                color:#00f3ff;
+                font-size:14px;
+            }
+        `;
+        this.shadow.appendChild(s);
     }
 
-    attachEvents(){
-        this.root.toggleBtn.addEventListener("click", () => {
-            this.visible = !this.visible;
-            this.root.panel.classList.toggle("visible", this.visible);
-        });
+    bindTabs() {
+        this.shadow.querySelectorAll("#tabs button").forEach(btn => {
+            btn.addEventListener("click", () => {
+                this.shadow.querySelectorAll("#tabs button")
+                    .forEach(b => b.classList.remove("on"));
 
-        this.root.tabs.forEach(tab=>{
-            tab.addEventListener("click",()=>{
-                this.root.tabs.forEach(t=>t.classList.remove("active"));
-                tab.classList.add("active");
+                this.shadow.querySelectorAll(".panel")
+                    .forEach(p => p.classList.remove("on"));
 
-                const target = tab.dataset.tab;
-                this.shadow.querySelectorAll(".tabContent").forEach(c=>{
-                    c.classList.remove("active");
-                });
-                this.shadow.querySelector("#" + target).classList.add("active");
+                btn.classList.add("on");
+                this.activeTab = btn.dataset.t;
+
+                this.shadow.querySelector(`#p-${this.activeTab}`).classList.add("on");
+                this.renderPanel();
             });
         });
     }
 
-    registerSitrepListener(){
-        this.general.signals.listen("SITREP_UPDATE", d => {
-            dbg("MajorUI received SITREP_UPDATE");
-            this.state.updateFromSitrep(d);
-            this.renderAll();
+    bindDrawer() {
+        const btn = this.shadow.querySelector("#btn");
+        const drawer = this.shadow.querySelector("#drawer");
+
+        btn.addEventListener("click", () => {
+            drawer.classList.toggle("on");
         });
     }
 
-    renderAll(){
-        this.renderOverview();
-        this.renderEnemy();
-        this.renderTargets();
-        this.renderActivity();
-        this.renderMatrix();
-        this.renderTerminal();
+    // ----------------------------------------------------------
+    // PANEL RENDERING
+    // ----------------------------------------------------------
+    renderPanel() {
+        if (this.activeTab === "overview") this.renderOverview();
+        else if (this.activeTab === "faction") this.renderFaction();
+        else if (this.activeTab === "enemy") this.renderEnemies();
+        else if (this.activeTab === "chain") this.renderChain();
+        else if (this.activeTab === "targets") this.renderTargets();
+        else if (this.activeTab === "ai") this.renderAI();
     }
 
-    renderOverview(){
-        const S = this.state;
-        const div = this.root.overviewTab;
+    // ------------------------
+    // OVERVIEW TAB
+    // ------------------------
+    renderOverview() {
+        const p = this.shadow.querySelector("#p-overview");
+        const u = this.store.user;
+        const a = this.store.ai;
 
-        if (!S.user){
-            div.innerHTML = `
-                <div class="section">
-                    Awaiting intel…
-                </div>
-            `;
+        if (!u || !a) {
+            p.textContent = "Awaiting data...";
             return;
         }
 
-        const t = Math.round((S.ai.threat||0)*100);
-        const r = Math.round((S.ai.risk||0)*100);
-        const tm = Math.round((S.ai.tempo||0)*100);
-        const inst = Math.round((S.ai.instability||0)*100);
-
-        const classT = t>70?"danger":t>40?"warn":"ok";
-        const classR = r>60?"danger":r>30?"warn":"ok";
-
-        div.innerHTML = `
-            <div class="section">
-                <b>Operator:</b> ${S.user.name} (Lv${S.user.level})<br>
-                HP: ${S.user.hp}/${S.user.max_hp}<br>
-            </div>
-
-            <div class="section">
-                <b>Chain:</b><br>
-                Hits: ${S.chain.hits}<br>
-                Time left: ${S.chain.timeLeft}s<br>
-                Momentum: ${S.chain.momentum}<br>
-                Collapse Risk: ${S.chain.collapseRisk}%<br>
-            </div>
-
-            <div class="section">
-                <b>AI Threat:</b> <span class="${classT}">${t}%</span><br>
-                <b>AI Risk:</b> <span class="${classR}">${r}%</span><br>
-                Tempo: ${tm}%<br>
-                Instability: ${inst}%<br>
-            </div>
-
-            <div class="section">
-                <b>Strategy:</b><br>
-                ${S.strategy}
-            </div>
-
-            <div class="section">
-                <b>Forecast:</b><br>
-                Enemy Surge: ${Math.round(S.forecast.enemySurge*100)}%<br>
-                Collapse Prob: ${Math.round(S.forecast.collapseProb*100)}%<br>
-                Peak Activity Window: ${S.forecast.peakWindow}<br>
-            </div>
+        p.innerHTML = `
+            <div><b>Operator:</b> ${u.name}</div>
+            <div><b>Level:</b> ${u.level}</div>
+            <div><b>Health:</b> ${u.hp}/${u.max_hp}</div>
+            <div><b>Status:</b> ${u.status}</div>
+            <br>
+            <div><b>Threat:</b> ${Math.round(a.threat * 100)}%</div>
+            <div><b>Risk:</b> ${Math.round(a.risk * 100)}%</div>
+            <div><b>Aggression:</b> ${Math.round(a.aggression * 100)}%</div>
+            <div><b>Instability:</b> ${Math.round(a.instability * 100)}%</div>
+            <br>
+            <div><b>Next Hit Estimate:</b> ${a.prediction.nextHit}</div>
+            <div><b>Potential Chain Drop:</b> ${a.prediction.drop}s</div>
+            <br>
+            <div><b>Notes:</b><br>${a.notes.map(n => `• ${n}`).join("<br>")}</div>
         `;
     }
 
-    renderEnemy(){
-        const S = this.state;
-        const div = this.root.enemyTab;
+    // ------------------------
+    // FACTION TAB
+    // ------------------------
+    renderFaction() {
+        const p = this.shadow.querySelector("#p-faction");
+        const list = this.store.faction;
 
-        if (!S.enemyMembers || S.enemyMembers.length === 0){
-            div.innerHTML = "<div class='section'>No enemy intel.</div>";
+        if (!list.length) {
+            p.textContent = "No faction data";
             return;
         }
 
-        let rows = "";
-
-        S.enemyMembers.forEach(m=>{
-            const idleMs = Date.now() - (m.last_action || 0);
-            const online = idleMs < 600000;
-            const cls = online ? "ok" : "danger";
-
-            rows += `
-                <tr>
-                    <td>${m.name}</td>
-                    <td>${m.level}</td>
-                    <td class="${cls}">${online ? "ONLINE" : "OFFLINE"}</td>
-                    <td>${m.status}</td>
-                    <td>${Math.round((m.threat||0)*100)}%</td>
-                </tr>
-            `;
-        });
-
-        div.innerHTML = `
-            <div class="section">
-                <b>Enemy Faction:</b> ${S.enemyFaction?.name || "Unknown"}<br>
-                Members: ${S.enemyMembers.length}
-            </div>
-
+        p.innerHTML = `
             <table>
-                <tr>
-                    <th>Name</th>
-                    <th>Lvl</th>
-                    <th>Status</th>
-                    <th>State</th>
-                    <th>Threat</th>
-                </tr>
-                ${rows}
+                <tr><th>Name</th><th>Lv</th><th>Status</th><th>Last Action</th></tr>
+                ${list.map(m => `
+                    <tr>
+                        <td>${m.name}</td>
+                        <td>${m.level}</td>
+                        <td>${m.status}</td>
+                        <td>${m.last_action}</td>
+                    </tr>
+                `).join("")}
             </table>
         `;
     }
 
-    renderTargets(){
-        const S = this.state;
-        const div = this.root.targetsTab;
+    // ------------------------
+    // ENEMIES TAB
+    // ------------------------
+    renderEnemies() {
+        const p = this.shadow.querySelector("#p-enemy");
+        const list = this.store.enemies;
 
-        let targets = "";
-        S.sharedTargets.forEach((t,idx)=>{
-            targets += `
-                <div class="targetRow">
-                    <span>${t.name}</span>
-                    <button data-idx="${idx}" class="delTargetBtn">X</button>
-                </div>
-            `;
-        });
-
-        div.innerHTML = `
-            <div class="section">
-                <b>Shared Targets (${S.sharedTargets.length})</b>
-            </div>
-
-            ${targets}
-
-            <button id="addTargetBtn">Add Target</button>
-        `;
-
-        div.querySelectorAll(".delTargetBtn").forEach(btn=>{
-            btn.addEventListener("click",()=>{
-                const idx = parseInt(btn.dataset.idx,10);
-                this.state.sharedTargets.splice(idx,1);
-                this.general.signals.dispatch("UPDATE_TARGETS", this.state.sharedTargets);
-                this.renderTargets();
-            });
-        });
-
-        div.querySelector("#addTargetBtn").addEventListener("click",()=>{
-            const name = prompt("Enter target name:");
-            if (!name) return;
-
-            this.state.sharedTargets.push({name});
-            this.general.signals.dispatch("UPDATE_TARGETS", this.state.sharedTargets);
-            this.renderTargets();
-        });
-    }
-
-    renderActivity(){
-        const S = this.state;
-        const div = this.root.activityTab;
-
-        div.innerHTML = `
-            <div class="section">
-                <b>Faction Activity (30m)</b><br>
-                <canvas id="activityCanvas" width="360" height="140"></canvas>
-            </div>
-
-            <div class="section">
-                <b>Enemy Surge Pattern</b><br>
-                <canvas id="surgeCanvas" width="360" height="100"></canvas>
-            </div>
-        `;
-
-        const c1 = this.shadow.querySelector("#activityCanvas");
-        const c2 = this.shadow.querySelector("#surgeCanvas");
-
-        this.drawActivityGraph(c1, S.activityFriendly, S.activityEnemy);
-        this.drawSurgeGraph(c2, S.forecast.enemyShift);
-    }
-
-    drawActivityGraph(canvas, friendly, enemy){
-        if (!canvas || !canvas.getContext) return;
-        const ctx = canvas.getContext("2d");
-
-        ctx.fillStyle = "#000";
-        ctx.fillRect(0,0,canvas.width,canvas.height);
-
-        const maxVal = Math.max(1, ...friendly, ...enemy);
-        const step = canvas.width / 30;
-
-        ctx.strokeStyle = "#00aaff";
-        ctx.beginPath();
-        friendly.forEach((v,i)=>{
-            const x = i * step;
-            const y = canvas.height - (v/maxVal)*canvas.height;
-            if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-        });
-        ctx.stroke();
-
-        ctx.strokeStyle = "#ff3355";
-        ctx.beginPath();
-        enemy.forEach((v,i)=>{
-            const x = i * step;
-            const y = canvas.height - (v/maxVal)*canvas.height;
-            if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-        });
-        ctx.stroke();
-    }
-
-    drawSurgeGraph(canvas, shift){
-        if (!canvas || !canvas.getContext) return;
-        const ctx = canvas.getContext("2d");
-
-        ctx.fillStyle = "#000";
-        ctx.fillRect(0,0,canvas.width,canvas.height);
-
-        if (!shift || shift.length === 0) return;
-
-        const maxVal = Math.max(1, ...shift.map(x=>Math.abs(x)));
-        const step = canvas.width / shift.length;
-
-        ctx.strokeStyle = "#ffaa00";
-        ctx.beginPath();
-        shift.forEach((v,i)=>{
-            const x = i * step;
-            const y = canvas.height/2 - (v/maxVal)*(canvas.height/2);
-            if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-        });
-        ctx.stroke();
-
-        ctx.strokeStyle = "#003344";
-        ctx.beginPath();
-        ctx.moveTo(0,canvas.height/2);
-        ctx.lineTo(canvas.width,canvas.height/2);
-        ctx.stroke();
-    }
-
-    renderMatrix(){
-        const S = this.state;
-        const div = this.root.matrixTab;
-
-        if (!S.matrix.statsReady){
-            div.innerHTML = "<div class='section'>No enemy threat data yet.</div>";
+        if (!list.length) {
+            p.textContent = "No enemy data";
             return;
         }
 
-        let rows = "";
-        S.matrix.enemies.forEach(m=>{
-            const cls = m.online ? "ok" : "danger";
-            rows += `
-                <div class="matrix-row">
-                    <span>${m.name} (Lv${m.level})</span>
-                    <span class="${cls}">${Math.round(m.combined*100)}%</span>
-                </div>
-            `;
-        });
-
-        div.innerHTML = `
-            <div class="section">
-                <b>Threat Matrix</b><br>
-                Combined threat based on level, AI threat score, and online activity.
-            </div>
-
-            <div class="section">
-                ${rows}
-            </div>
+        p.innerHTML = `
+            <table>
+                <tr><th>Name</th><th>Lv</th><th>Status</th><th>Score</th></tr>
+                ${list.map(m => `
+                    <tr>
+                        <td>${m.name}</td>
+                        <td>${m.level}</td>
+                        <td>${m.status}</td>
+                        <td>${m.score}</td>
+                    </tr>
+                `).join("")}
+            </table>
         `;
     }
 
-    renderTerminal(){
-        const S = this.state;
-        const div = this.root.terminalTab;
+    // ------------------------
+    // CHAIN TAB
+    // ------------------------
+    renderChain() {
+        const p = this.shadow.querySelector("#p-chain");
+        const c = this.store.chain;
 
-        let logHTML = "";
-        S.intelLog.forEach(entry=>{
-            const t = new Date(entry.timestamp).toLocaleTimeString();
-            logHTML += `
-                <div class="intelLogEntry">
-                    [${t}] Chain: ${entry.chain} | Threat: ${Math.round(entry.threat*100)}% | Risk: ${Math.round(entry.risk*100)}% | Enemy Online: ${entry.onlineEnemy}
-                </div>
-            `;
-        });
+        if (!c) {
+            p.textContent = "No chain data";
+            return;
+        }
 
-        div.innerHTML = `
-            <div class="section">
-                <b>Intel Terminal</b><br>
-                Real-time logs from the Army Intelligence Network.
-            </div>
-
-            <div id="intelTerminal">${logHTML}</div>
+        p.innerHTML = `
+            <div><b>Hits:</b> ${c.hits}</div>
+            <div><b>Timeout:</b> ${c.timeLeft}s</div>
         `;
+    }
+
+    // ------------------------
+    // TARGETS TAB
+    // ------------------------
+    renderTargets() {
+        const p = this.shadow.querySelector("#p-targets");
+        const list = this.store.targets[this.targetSubTab] || [];
+
+        if (!list.length) {
+            p.textContent = "No targets in this category.";
+            return;
+        }
+
+        p.innerHTML = `
+            <table>
+                <tr><th>Name</th><th>Lv</th><th>Status</th></tr>
+                ${list.map(t => `
+                    <tr>
+                        <td>${t.name}</td>
+                        <td>${t.level}</td>
+                        <td>${t.status}</td>
+                    </tr>
+                `).join("")}
+            </table>
+        `;
+    }
+
+    // ------------------------
+    // AI TAB
+    // ------------------------
+    renderAI() {
+        const p = this.shadow.querySelector("#p-ai");
+        p.innerHTML = `
+            <div id="ai-log"></div>
+            <input class="ai-cmd" id="ai-input" placeholder="Ask the Colonel...">
+        `;
+
+        const input = p.querySelector("#ai-input");
+        const log = p.querySelector("#ai-log");
+
+        input.addEventListener("keydown", e => {
+            if (e.key === "Enter" && input.value.trim()) {
+                const q = input.value.trim();
+
+                const msg = document.createElement("div");
+                msg.className = "ai-msg";
+                msg.textContent = "> " + q;
+                log.appendChild(msg);
+
+                this.general.signals.dispatch("ASK_COLONEL", { question: q });
+
+                input.value = "";
+            }
+        });
     }
 }
 
-function bootWhenReady(){
-    if (typeof window.WAR_GENERAL === "undefined" || !window.WAR_GENERAL.signals){
-        setTimeout(bootWhenReady, 200);
+function wait(i = 0) {
+    if (window.WAR_GENERAL && typeof window.WAR_GENERAL.register === "function") {
+        window.WAR_GENERAL.register("Major", new Major());
         return;
     }
-
-    dbg("Major.js initializing…");
-
-    try {
-        new MajorUI(window.WAR_GENERAL);
-        dbg("MajorUI launched.");
-    } catch(e){
-        dbg("Major init error: " + e);
-    }
+    if (i < 50) setTimeout(() => wait(i + 1), 200);
 }
 
-bootWhenReady();
+wait();
 
 })();
