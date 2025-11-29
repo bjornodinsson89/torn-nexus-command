@@ -18,32 +18,27 @@ const Major = {
     drawer: null,
     btn: null,
     
-    // State
     detached: false,
     attachedSide: "left",
     activeTab: "overview",
     targetSubTab: "war",
     
-    // Filters
     enemyFilters: { hideHosp: false, hideTravel: false },
 
-    // Config
     alerts: { enabled: true, threshold: 90, flash: true },
     dataScale: 1.0,
     
-    // Data Store
     data: {
         user: {},
         faction: [],
         chain: {},
-        war: {}, // Raw war object
+        war: { wars: {} },       // patched: always an object containing { wars:{} }
         targets: { personal: [], war: [], shared: [] },
         ai: { topTargets: [], summary: [] },
-        aiMemory: {}
+        aiMemory: {},
+        enemy: []
     }
 };
-
-/* BLOCK: INIT */
 
 Major.init = function(nexus){
     this.nexus = nexus;
@@ -54,8 +49,6 @@ Major.init = function(nexus){
     this.bindNexusEvents();
     this.loadSettings();
 };
-
-/* BLOCK: UI BUILDER */
 
 Major.createHost = function(){
     if (document.getElementById("war-nexus-major")) return;
@@ -116,15 +109,12 @@ Major.createUI = function(){
     this.drawer = this.shadow.querySelector("#wnx-drawer");
     this.btn = this.shadow.querySelector("#wnx-trigger");
     this.alertLayer = this.shadow.querySelector("#wnx-alert-layer");
-    
     this.shadow.querySelector("#wnx-close").onclick = () => this.drawer.classList.remove("open");
 };
 
-/* BLOCK: STYLES */
-
 Major.applyTacticalStyles = function(){
     const s = document.createElement("style");
-    s.textContent = `
+    s.textContent = `        
         :host {
             --bg: #050505; --panel: rgba(14, 18, 22, 0.96); --border: #333;
             --primary: #0ff; --danger: #ff003c; --warn: #ffcc00; --ok: #00ff9d;
@@ -198,24 +188,25 @@ Major.applyTacticalStyles = function(){
     this.shadow.appendChild(s);
 };
 
-/* BLOCK: BINDINGS */
-
 Major.bindInteractions = function(){
     this.btn.onclick = () => {
         this.drawer.classList.toggle("open");
-        if(this.drawer.classList.contains("open")) this.nexus.events.emit("UI_DRAWER_OPENED");
+        if (this.drawer.classList.contains("open")){
+            this.nexus.events.emit("UI_DRAWER_OPENED");
+        }
     };
 
     const name = this.shadow.querySelector("#wnx-tab-name");
+
     this.shadow.querySelectorAll(".wnx-nav button").forEach(b => {
         b.onclick = () => {
-            if(b.classList.contains("spacer")) return;
             this.shadow.querySelectorAll(".wnx-nav button").forEach(x => x.classList.remove("active"));
             this.shadow.querySelectorAll(".panel").forEach(x => x.classList.remove("active"));
-            
             b.classList.add("active");
+
             this.activeTab = b.dataset.t;
             this.shadow.querySelector(`#p-${this.activeTab}`).classList.add("active");
+
             name.textContent = this.activeTab.toUpperCase();
             this.renderActiveTab();
         };
@@ -225,27 +216,25 @@ Major.bindInteractions = function(){
 Major.bindNexusEvents = function(){
     this.nexus.events.on("SITREP_UPDATE", d => {
         this.data.user = d.user;
-        this.data.faction = d.factionMembers;
-        this.data.chain = d.chain;
-        this.data.war = d.war;
-        this.data.ai = d.ai;
-        this.data.enemy = d.enemyMembers;
+        this.data.faction = d.factionMembers || [];
+        this.data.chain = d.chain || {};
+        this.data.war = d.war || { wars: {} };
+        this.data.ai = d.ai || {};
+        this.data.enemy = d.enemyMembers || [];
         this.data.targets.war = d.ai?.topTargets || [];
         this.renderActiveTab();
     });
-    
+
     this.nexus.events.on("ASK_COLONEL_RESPONSE", d => {
         this.appendTermLine(d.answer, true);
     });
 };
 
-/* BLOCK: LOGIC */
-
 Major.loadSettings = function(){
     try {
         const s = JSON.parse(localStorage.getItem("WN_MAJOR_CFG"));
-        if(s) { this.alerts = s.alerts; this.dataScale = s.dataScale; }
-    } catch(e) {}
+        if(s){ this.alerts = s.alerts; this.dataScale = s.dataScale; }
+    } catch(e){}
     this.shadow.querySelector("#wnx-viewport").style.zoom = this.dataScale;
 };
 
@@ -253,22 +242,24 @@ Major.renderActiveTab = function(){
     if(this.activeTab === "overview") this.renderOverview();
     else if(this.activeTab === "war") this.renderWar();
     else if(this.activeTab === "enemy") this.renderEnemy();
-    else if(this.activeTab === "faction") this.renderFaction();
     else if(this.activeTab === "chain") this.renderChain();
+    else if(this.activeTab === "faction") this.renderFaction();
     else if(this.activeTab === "ai") this.renderAI();
 };
-
-/* --- RENDERERS --- */
 
 Major.renderOverview = function(){
     const p = this.shadow.querySelector("#p-overview");
     const u = this.data.user || {};
     const c = this.data.chain || {};
-    const t = c.timeLeft ?? c.timeout ?? 0;
+
+    const t = c.timeout ?? c.timeLeft ?? 0;
     const a = this.data.ai || { summary: [] };
-    
-    if(!u.name) { p.innerHTML = "<div style='padding:20px;color:#555'>CONNECTING...</div>"; return; }
-    
+
+    if(!u.name){
+        p.innerHTML = "<div style='padding:20px;color:#555'>CONNECTING...</div>";
+        return;
+    }
+
     p.innerHTML = `
         <div class="card prio">
             <div class="card-head">OPERATOR</div>
@@ -302,23 +293,20 @@ Major.renderOverview = function(){
 
 Major.renderWar = function(){
     const p = this.shadow.querySelector("#p-war");
-    const warData = this.data.war || {};
-    // Calculate if we have an active ranked war
-    // Often torn API returns war info in 'wars' object
+    const warObj = this.data.war?.wars || {};
+    const wars = Object.values(warObj);
+
     let activeWar = null;
     let upcomingWar = null;
-    
-    if (warData.wars) {
-        Object.values(warData.wars).forEach(w => {
-            // Timestamp based check (API V2 usually gives start/end)
-            const now = Date.now() / 1000;
-            if(w.start > now) upcomingWar = w;
-            else if (w.end > now || w.end === 0) activeWar = w;
-        });
-    }
 
-    if(activeWar) {
-        // ACTIVE WAR VIEW
+    const now = Date.now() / 1000;
+
+    wars.forEach(w => {
+        if (w.start > now) upcomingWar = w;
+        else if (w.end === 0 || w.end > now) activeWar = w;
+    });
+
+    if(activeWar){
         p.innerHTML = `
             <div class="card alert">
                 <div class="card-head">ACTIVE ENGAGEMENT</div>
@@ -338,8 +326,9 @@ Major.renderWar = function(){
                 </div>
             </div>
         `;
-    } else if (upcomingWar) {
-        // UPCOMING VIEW
+    }
+
+    else if (upcomingWar){
         const start = new Date(upcomingWar.start * 1000).toLocaleString();
         p.innerHTML = `
             <div class="card prio">
@@ -351,8 +340,9 @@ Major.renderWar = function(){
                 </div>
             </div>
         `;
-    } else {
-        // PEACE VIEW
+    }
+
+    else {
         p.innerHTML = `
             <div class="card">
                 <div class="card-head">WAR STATUS</div>
@@ -367,12 +357,12 @@ Major.renderWar = function(){
 Major.renderEnemy = function(){
     const p = this.shadow.querySelector("#p-enemy");
     let list = this.data.enemy || [];
-    
-    // Filters
-    if(this.enemyFilters.hideHosp) list = list.filter(e => !(e.status||"").toLowerCase().includes("hospital"));
-    if(this.enemyFilters.hideTravel) list = list.filter(e => !(e.status||"").toLowerCase().includes("travel"));
-    
-    // Sorting (Online > Level)
+
+    if(this.enemyFilters.hideHosp)
+        list = list.filter(e => !(e.status||"").toLowerCase().includes("hospital"));
+    if(this.enemyFilters.hideTravel)
+        list = list.filter(e => !(e.status||"").toLowerCase().includes("travel"));
+
     list.sort((a,b) => (b.online?1:0) - (a.online?1:0) || b.level - a.level);
 
     const rows = list.map(e => `
@@ -401,7 +391,7 @@ Major.renderEnemy = function(){
             </table>
         </div>
     `;
-    
+
     p.querySelector("#f-hosp").onclick = () => { this.enemyFilters.hideHosp = !this.enemyFilters.hideHosp; this.renderEnemy(); };
     p.querySelector("#f-trav").onclick = () => { this.enemyFilters.hideTravel = !this.enemyFilters.hideTravel; this.renderEnemy(); };
 };
@@ -431,10 +421,30 @@ Major.renderFaction = function(){
     `;
 };
 
+Major.renderChain = function(){
+    const p = this.shadow.querySelector("#p-chain");
+    const c = this.data.chain || {};
+
+    p.innerHTML = `
+        <div class="card">
+            <div class="card-head">CHAIN DETAILS</div>
+            <div class="grid-2">
+                 <div style="text-align:center;">
+                    <div class="stat-lg">${c.hits||0}</div>
+                    <div class="stat-sm">HITS</div>
+                 </div>
+                 <div style="text-align:center;">
+                    <div class="stat-lg">${(c.modifier||1).toFixed(2)}x</div>
+                    <div class="stat-sm">MULT</div>
+                 </div>
+            </div>
+        </div>
+    `;
+};
+
 Major.renderAI = function(){
     const p = this.shadow.querySelector("#p-ai");
     
-    // Preserve terminal history if it exists
     const oldTerm = p.querySelector(".term");
     const history = oldTerm ? oldTerm.innerHTML : '<div class="term-line">> COLONEL AI ONLINE.</div>';
 
@@ -454,14 +464,14 @@ Major.renderAI = function(){
     
     const term = p.querySelector("#ai-term");
     const inp = p.querySelector("#ai-input");
-    
+
     const send = (txt) => {
         this.appendTermLine(`> ${txt}`, false);
         this.nexus.events.emit("ASK_COLONEL", { question: txt });
     };
 
     inp.onkeydown = (e) => {
-        if(e.key === "Enter" && inp.value.trim()){
+        if (e.key === "Enter" && inp.value.trim()){
             send(inp.value.trim());
             inp.value = "";
         }
@@ -471,34 +481,21 @@ Major.renderAI = function(){
     p.querySelector("#cmd-tgt").onclick = () => send("target");
     p.querySelector("#cmd-war").onclick = () => send("war");
     p.querySelector("#cmd-help").onclick = () => send("help");
-    
+
     term.scrollTop = term.scrollHeight;
 };
 
 Major.appendTermLine = function(txt, isResponse){
     const term = this.shadow.querySelector("#ai-term");
-    if(!term) return;
+    if (!term) return;
+
     const div = document.createElement("div");
     div.className = "term-line";
     div.style.color = isResponse ? "var(--primary)" : "#888";
     div.textContent = txt;
+
     term.appendChild(div);
     term.scrollTop = term.scrollHeight;
-};
-
-/* MISC */
-Major.renderChain = function(){
-    const p = this.shadow.querySelector("#p-chain");
-    const c = this.data.chain || {};
-    p.innerHTML = `
-        <div class="card">
-            <div class="card-head">CHAIN DETAILS</div>
-            <div class="grid-2">
-                 <div style="text-align:center"><div class="stat-lg">${c.hits||0}</div><div class="stat-sm">HITS</div></div>
-                 <div style="text-align:center"><div class="stat-lg">${c.modifier||"1.00"}x</div><div class="stat-sm">MULT</div></div>
-            </div>
-        </div>
-    `;
 };
 
 window.__NEXUS_OFFICERS = window.__NEXUS_OFFICERS || [];
