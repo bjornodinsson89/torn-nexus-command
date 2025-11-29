@@ -14,158 +14,233 @@
 //   - Integration with Sergeant shared intel
 ////////////////////////////////////////////////////////////
 
-(function(){
+(function() {
+    "use strict";
 
-WARDBG("Colonel file loaded.");
+    const Colonel = {
+        general: null,
+        lastUpdate: 0,
 
-const Colonel = {
+        state: {
+            user: {},
+            chain: {},
+            faction: {},
+            enemiesRaw: {},
+            targets: {
+                personal: [],
+                war: [],
+                shared: []
+            }
+        },
 
-    general: null,
+        ai: {
+            threat: 0,
+            risk: 0,
+            aggression: 0,
+            instability: 0,
+            prediction: { drop: 0, nextHit: 0 },
+            topTargets: [],
+            notes: []
+        },
 
-    activityFriendly: Array(30).fill(0),
-    activityEnemy: Array(30).fill(0),
-    lastActivityUpdate: 0,
-    sharedTargets: [],
+        init(G) {
+            this.general = G;
+            this.general.signals.listen("RAW_INTEL", d => this.ingest(d));
+            this.general.signals.listen("ASK_COLONEL", d => this.answerAI(d));
+        },
 
-    init(general){
-        this.general = general;
-        WARDBG("Colonel online (MAX-AI)");
+        // ------------------------------------------------------------------
+        // INGEST RAW INTEL → UPDATE STATE → UPDATE AI → DISPATCH SITREP
+        // ------------------------------------------------------------------
+        ingest(d) {
+            this.state.user = d.user || {};
+            this.state.chain = d.chain || {};
+            this.state.faction = d.faction || {};
+            this.state.enemiesRaw = d.war?.enemyMembers || {};
 
-        general.signals.listen("RAW_INTEL", intel => {
-            this.process(intel);
-        });
+            this.updateAI();
+            this.dispatchSITREP();
+        },
 
-        general.signals.listen("UPDATE_TARGETS", targets => {
-            this.sharedTargets = Array.isArray(targets) ? targets : [];
-        });
-    },
+        // ------------------------------------------------------------------
+        // AI ENGINE CORE
+        // ------------------------------------------------------------------
+        updateAI() {
+            const now = Date.now();
+            const user = this.state.user;
+            const chain = this.state.chain;
+            const enemyList = Object.values(this.state.enemiesRaw);
 
-    process(intel){
-        const user = intel.user;
-        const friendlyMembers = intel.friendlyMembers || [];
-        const enemyMembers = intel.enemyMembers || [];
-        const chain = intel.chain || {};
-        const friendlyFaction = intel.friendlyFaction || {};
-        const enemyFaction = intel.enemyFaction || {};
+            // Basic stats
+            const online = enemyList.filter(
+                m => (now - (m.last_action?.timestamp || 0)) < 600000
+            ).length;
 
-        this.applyThreatModel(enemyMembers, friendlyMembers, chain);
-        this.updateActivityWindows(friendlyMembers, enemyMembers);
+            const hosp = enemyList.filter(m => {
+                const st = (m.status?.state || "").toLowerCase();
+                return st.includes("hospital");
+            }).length;
 
-        const ai = this.computeAI(enemyMembers, chain);
-
-        const sitrep = {
-            user,
-            chain,
-            friendlyFaction,
-            enemyFaction,
-            friendlyMembers,
-            enemyMembers,
-            sharedTargets: this.sharedTargets || [],
-            activityFriendly: [...this.activityFriendly],
-            activityEnemy: [...this.activityEnemy],
-            ai
-        };
-
-        WAR_GENERAL.signals.dispatch("SITREP_UPDATE", sitrep);
-    },
-
-    applyThreatModel(enemyMembers, friendlyMembers, chain){
-        const now = Date.now();
-
-        for (let m of enemyMembers){
-            const last = m.last_action || 0;
-            const idle = now - last;
-            const online = idle < 600000;
-
+            // Threat (enemy activity + chain movement)
             let threat = 0;
+            threat += Math.min(0.7, online * 0.04);
+            if (hosp < enemyList.length * 0.5) threat += 0.1;
+            if ((chain.hits || 0) > 0) threat += 0.15;
 
-            if (online) threat += 0.35;
+            // Risk (chain collapse danger)
+            let risk = 0;
+            if (chain.timeLeft < 20) risk += 0.7;
+            else if (chain.timeLeft < 60) risk += 0.4;
+            if ((user.status || "").toLowerCase().includes("hospital"))
+                risk += 0.2;
 
-            threat += (m.level / 100) * 0.25;
-
-            if (m.status === "Hospital") threat -= 0.25;
-            if (m.status === "Okay") threat += 0.15;
-            if (m.status === "Traveling") threat -= 0.20;
-
-            if (chain.hits > 0){
-                if (online) threat += 0.15;
-                if ((chain.timeLeft || 0) < 60) threat += 0.10;
+            // Aggression (pace of hits)
+            let aggression = 0;
+            if (this.lastUpdate > 0) {
+                const dt = (now - this.lastUpdate) / 1000;
+                aggression = (chain.hits || 0) / Math.max(1, dt);
             }
 
-            m.threat = Math.max(0, Math.min(1, threat));
-            m.online = online;
+            // Instability (volatility)
+            let instability = Math.abs((chain.timeLeft || 0) - 30) / 60;
+
+            // Prediction
+            const drop = chain.timeLeft < 120 ? (120 - chain.timeLeft) / 2 : 0;
+            const nextHit = online > 0 ? Math.round(online * threat * 3) : 0;
+
+            this.ai.threat = Math.min(1, threat);
+            this.ai.risk = Math.min(1, risk);
+            this.ai.aggression = Math.min(1, aggression);
+            this.ai.instability = Math.min(1, instability);
+            this.ai.prediction = { drop: Math.max(0, drop), nextHit };
+
+            // Score enemies
+            this.ai.topTargets = this.scoreTargets(enemyList).slice(0, 10);
+
+            // Build notes
+            this.ai.notes = this.buildNotes();
+
+            this.lastUpdate = now;
+        },
+
+        // ------------------------------------------------------------------
+        // ENEMY SCORING
+        // ------------------------------------------------------------------
+        scoreTargets(list) {
+            const now = Date.now();
+
+            return list.map(m => {
+                let score = 0;
+
+                score += (m.level || 1) * 2;
+
+                const st = (m.status?.state || "").toLowerCase();
+                if (st.includes("hospital")) score -= 25;
+                if (st.includes("jail")) score -= 30;
+                if (st.includes("travel")) score -= 15;
+
+                if ((m.last_action?.timestamp || 0) > now - 300000)
+                    score += 15;
+
+                return { ...m, score: Math.max(0, score) };
+            }).sort((a, b) => b.score - a.score);
+        },
+
+        // ------------------------------------------------------------------
+        // STRATEGIC NOTES FOR MAJOR OVERVIEW
+        // ------------------------------------------------------------------
+        buildNotes() {
+            const notes = [];
+            const a = this.ai;
+            const c = this.state.chain;
+
+            if (a.threat > 0.7) notes.push("High enemy activity detected.");
+            if (a.risk > 0.7) notes.push("Chain stability critical.");
+            if (c.hits > 0) notes.push("Chain engagement active.");
+            if (a.prediction.nextHit > 0)
+                notes.push("Enemy movement likely.");
+            if (a.instability > 0.5)
+                notes.push("Volatile battlefield conditions.");
+
+            return notes;
+        },
+
+        // ------------------------------------------------------------------
+        // SITREP BUILDER
+        // ------------------------------------------------------------------
+        formatFactionMembers() {
+            const now = Date.now();
+            const m = this.state.faction?.members || {};
+            return Object.values(m).map(x => ({
+                id: x.ID,
+                name: x.name,
+                level: x.level,
+                status: x.status?.state || "",
+                online: ((now - (x.last_action?.timestamp || 0)) < 600000),
+                last_action: x.last_action?.relative
+            }));
+        },
+
+        formatEnemyMembers() {
+            const now = Date.now();
+            return this.ai.topTargets.map(x => ({
+                id: x.ID,
+                name: x.name,
+                level: x.level,
+                status: x.status?.state || "",
+                online: ((now - (x.last_action?.timestamp || 0)) < 600000),
+                score: x.score
+            }));
+        },
+
+        dispatchSITREP() {
+            this.general.signals.dispatch("SITREP_UPDATE", {
+                user: this.state.user,
+                chain: this.state.chain,
+                factionMembers: this.formatFactionMembers(),
+                enemyFactionMembers: this.formatEnemyMembers(),
+                targets: this.state.targets,
+                ai: this.ai
+            });
+        },
+
+        // ------------------------------------------------------------------
+        // AI CONSOLE (Major → Colonel)
+        // ------------------------------------------------------------------
+        answerAI(payload) {
+            const question = payload?.question || "";
+            if (!question.trim()) return;
+
+            let response = "I don't understand.";
+
+            const a = this.ai;
+            const c = this.state.chain;
+
+            if (question.includes("threat"))
+                response = `Threat level is ${Math.round(a.threat * 100)}%.`;
+
+            else if (question.includes("risk"))
+                response = `Chain collapse risk at ${Math.round(a.risk * 100)}%.`;
+
+            else if (question.includes("next hit"))
+                response = `Estimated next enemy action: ${a.prediction.nextHit} units.`;
+
+            else if (question.includes("chain"))
+                response = `Chain at ${c.hits} hits with ${c.timeLeft}s remaining.`;
+
+            else if (question.includes("targets"))
+                response = `Top hostile: ${this.ai.topTargets[0]?.name || "None"}.`;
+
+            this.general.signals.dispatch("ASK_COLONEL_RESPONSE", {
+                answer: response
+            });
         }
-    },
+    };
 
-    updateActivityWindows(friendlyMembers, enemyMembers){
-        const now = Date.now();
-        const delta = now - this.lastActivityUpdate;
-
-        if (delta < 60000 && this.lastActivityUpdate !== 0) return;
-        this.lastActivityUpdate = now;
-
-        const friendlyOnline = friendlyMembers.filter(m => {
-            const last = m.last_action || 0;
-            return (now - last) < 600000;
-        }).length;
-
-        const enemyOnline = enemyMembers.filter(m => m.online).length;
-
-        this.activityFriendly.shift();
-        this.activityEnemy.shift();
-
-        this.activityFriendly.push(friendlyOnline);
-        this.activityEnemy.push(enemyOnline);
-    },
-
-    computeAI(enemyMembers, chain){
-        const enemyOnline = enemyMembers.filter(m => m.online).length;
-        const avgThreat = enemyMembers.reduce((s,m)=>s+(m.threat||0),0) / Math.max(1, enemyMembers.length);
-
-        const threat = Math.min(1, (enemyOnline / 15) * 0.4 + avgThreat * 0.6);
-
-        const collapse = (chain.collapseRisk || 0) / 100;
-        const momentum = (chain.momentum || 0) / 100;
-        const risk = Math.min(1, collapse * 0.6 + threat * 0.4 + momentum * 0.1);
-
-        const tempo = this.computeTempo();
-        const instability = this.computeInstability(enemyMembers);
-
-        return { threat, risk, tempo, instability };
-    },
-
-    computeTempo(){
-        const a = this.activityEnemy;
-        if (a.length < 10) return 0;
-
-        const recent = a.slice(-5);
-        const old = a.slice(-10, -5);
-
-        const avgRecent = recent.reduce((s,v)=>s+v,0)/recent.length;
-        const avgOld = old.reduce((s,v)=>s+v,0)/old.length;
-
-        const diff = avgRecent - avgOld;
-
-        return Math.max(0, Math.min(1, (diff / 10)));
-    },
-
-    computeInstability(enemyMembers){
-        if (enemyMembers.length < 3) return 0;
-
-        const threats = enemyMembers.map(m => m.threat || 0);
-        const avg = threats.reduce((s,v)=>s+v,0)/threats.length;
-
-        let variance = 0;
-        threats.forEach(t => {
-            variance += Math.pow(t - avg, 2);
-        });
-
-        variance /= threats.length;
-
-        return Math.min(1, variance * 4);
+    if (typeof WAR_GENERAL !== "undefined") {
+        WAR_GENERAL.register("Colonel", Colonel);
+    } else if (typeof WARDBG === "function") {
+        WARDBG("Colonel failed to register: WAR_GENERAL missing");
     }
-};
-
-Colonel.init(WAR_GENERAL);
 
 })();
