@@ -1,906 +1,1049 @@
-// major.js — WAR NEXUS 3.0.3
-// Minimal Tactical UI (C1) — Complete Rewrite
-// Compact mobile-friendly drawer, full graphs, tables, AI chat,
-// chain watcher, sync toggle, member updates, enemy dashboards,
-// war UI, and more. Zero placeholders. Fully functional.
+// ============================================================================
+//  WAR NEXUS — MAJOR v3.2
+//  EXPANDED TACTICAL DASHBOARD + COLONEL v5.0 INTEGRATION
+// ============================================================================
 
 (function(){
 "use strict";
 
 const Major = {
+
     nexus: null,
-    host: null,
+
+    // === DOM roots ===
+    container: null,
     shadow: null,
 
-    // UI state
-    flags: {
-        drawerOpen: false,
-        syncEnabled: true,
-        chainActive: false,
-    },
+    // === active tab ===
+    activeTab: "overview",
 
-    // Data cache
+    // === data fed by SITREP ===
     data: {
         user: {},
+        stats: {},
+        bars: {},
+        chain: {},
         faction: {},
         factionMembers: [],
         enemies: [],
-        targets: [],
-        chain: {},
-        ai: {},
-        aiMessages: [],
-        logs: [],
-        sharedTargets: [],
-        orders: {},
-        chainHistory: [],
-        enemyActivityBuckets: new Array(24).fill(0),
+        wars: [],
+        predictions: {},
     },
 
-    // Graph handles
-    graph: {
-        chainRealtime: null,
-        chainHistory: null,
-    },
-
-    // Live buffers
-    buffers: {
-        chainRealtime: [],
-    },
-
-    MAX_LOGS: 400,
+    charts: {} // Chart.js instances
 };
 
 /* ============================================================================
    INIT
-   ============================================================================
-*/
+   ============================================================================ */
 Major.init = function(nexus){
     this.nexus = nexus;
 
-    this.createHost();
-    this.renderBase();
+    this.createUI();
+    this.applyStyles();
     this.bindEvents();
-    this.bindNexusEvents();
 
-    nexus.log("Major 3.0.3 UI Initialized");
+    nexus.log("Major v3.2 loaded (Tactical Dashboard)");
 };
 
 /* ============================================================================
-   HOST + SHADOW ROOT
-   ============================================================================
-*/
-Major.createHost = function(){
-    if (document.getElementById("warlab-major-ui")) return;
+   UI CREATION
+   ============================================================================ */
+Major.createUI = function(){
+    // Create container
+    this.container = document.createElement("div");
+    this.container.id = "wn-major-container";
+    document.body.appendChild(this.container);
 
-    this.host = document.createElement("div");
-    this.host.id = "warlab-major-ui";
-    this.shadow = this.host.attachShadow({ mode: "open" });
+    // Shadow DOM
+    this.shadow = this.container.attachShadow({mode:"open"});
 
-    document.body.appendChild(this.host);
-};
-
-/* ============================================================================
-   BASE UI RENDER
-   ============================================================================
-*/
-Major.renderBase = function(){
+    // Base layout
     this.shadow.innerHTML = `
-    <style>
-        :host {
-            --bg:#0f0f0f;
-            --panel:#181818;
-            --hover:#1f1f1f;
-            --border:#222;
-            --text:#e0e0e0;
-            --mute:#8a8a8a;
-            --accent:#4ac3ff;
-            --accent2:#8affef;
-            --good:#73ff73;
-            --warn:#ffdd55;
-            --bad:#ff5555;
-            --font:'Segoe UI',Roboto,Arial,sans-serif;
-            --radius:6px;
-        }
-        *, *::before, *::after { box-sizing:border-box; }
-
-        /* Trigger Button */
-        #nexus-trigger {
-            position:fixed;
-            bottom:18px;
-            right:18px;
-            width:52px;
-            height:52px;
-            border-radius:8px;
-            background:var(--panel);
-            border:1px solid var(--accent);
-            color:var(--accent);
-            display:flex;
-            align-items:center;
-            justify-content:center;
-            font-family:var(--font);
-            font-size:22px;
-            cursor:pointer;
-            z-index:999999;
-            transition:0.2s;
-        }
-        #nexus-trigger:hover {
-            background:var(--hover);
-            box-shadow:0 0 8px var(--accent);
-        }
-
-        /* Drawer */
-        #drawer {
-            position:fixed;
-            top:0;
-            right:0;
-            width:340px;
-            max-width:90%;
-            height:100vh;
-            background:var(--bg);
-            border-left:1px solid var(--border);
-            transform:translateX(100%);
-            transition:transform .22s ease;
-            z-index:999998;
-            display:flex;
-            flex-direction:column;
-        }
-        #drawer.open {
-            transform:translateX(0%);
-            box-shadow:-4px 0 12px rgba(0,0,0,.7);
-        }
-
-        /* Drawer Header */
-        #drawer-header {
-            padding:12px;
-            background:#111;
-            color:var(--accent);
-            font-size:16px;
-            font-weight:600;
-            text-align:center;
-            border-bottom:1px solid var(--border);
-            position:relative;
-        }
-        #drawer-close {
-            position:absolute;
-            right:10px;
-            top:8px;
-            color:var(--text);
-            cursor:pointer;
-            font-size:18px;
-        }
-        #drawer-close:hover {
-            color:var(--accent);
-        }
-
-        /* Tabs */
-        #tabs {
-            display:flex;
-            background:#101010;
-            border-bottom:1px solid var(--border);
-        }
-        #tabs button {
-            flex:1;
-            padding:10px 0;
-            background:#101010;
-            color:var(--mute);
-            border:0;
-            font-size:12px;
-            cursor:pointer;
-            transition:0.2s;
-            font-family:var(--font);
-        }
-        #tabs button.active {
-            color:var(--accent);
-            border-bottom:2px solid var(--accent);
-        }
-        #tabs button:hover {
-            color:var(--accent2);
-        }
-
-        /* Panels container */
-        #panels {
-            flex:1;
-            overflow-y:auto;
-            padding:12px;
-            color:var(--text);
-            font-family:var(--font);
-        }
-        .panel { display:none; }
-        .panel.active { display:block; }
-
-        /* Card */
-        .card {
-            background:var(--panel);
-            border:1px solid var(--border);
-            padding:12px;
-            border-radius:var(--radius);
-            margin-bottom:12px;
-        }
-
-        /* Tables */
-        table {
-            width:100%;
-            border-collapse:collapse;
-            font-size:12px;
-        }
-        th {
-            padding:6px;
-            text-align:left;
-            border-bottom:1px solid var(--border);
-            background:#121212;
-            color:var(--accent2);
-        }
-        td {
-            padding:6px;
-            border-bottom:1px solid #222;
-            color:var(--text);
-        }
-
-        /* Buttons */
-        .btn {
-            padding:4px 8px;
-            background:#121212;
-            border:1px solid var(--border);
-            border-radius:var(--radius);
-            color:var(--text);
-            cursor:pointer;
-            font-size:12px;
-        }
-        .btn:hover {
-            border-color:var(--accent);
-            color:var(--accent);
-        }
-
-        /* AI Console */
-        #ai-console {
-            background:#111;
-            padding:12px;
-            border:1px solid var(--border);
-            border-radius:var(--radius);
-        }
-        #ai-log {
-            max-height:260px;
-            overflow-y:auto;
-            font-family:Consolas,monospace;
-            margin-bottom:10px;
-        }
-        .ai-user { color:var(--accent2); margin-bottom:4px; }
-        .ai-colonel { color:var(--accent); margin-bottom:6px; }
-
-        #ai-input {
-            width:100%;
-            padding:8px;
-            background:#181818;
-            border:1px solid var(--border);
-            border-radius:var(--radius);
-            color:var(--text);
-            font-family:var(--font);
-        }
-
-        /* Chain Watcher */
-        #chain-watcher {
-            display:flex;
-            justify-content:space-between;
-            align-items:center;
-            background:#111;
-            padding:8px 10px;
-            border-radius:var(--radius);
-            border:1px solid var(--border);
-            margin-bottom:12px;
-        }
-        #chain-light {
-            width:14px;
-            height:14px;
-            background:#444;
-            border-radius:50%;
-        }
-        #chain-light.active {
-            background:var(--good);
-            box-shadow:0 0 8px var(--good);
-        }
-
-        /* Sync Toggle */
-        #sync-toggle {
-            display:flex;
-            align-items:center;
-            justify-content:space-between;
-        }
-        #sync-btn {
-            width:42px;
-            height:22px;
-            background:#333;
-            border-radius:11px;
-            position:relative;
-            cursor:pointer;
-        }
-        #sync-btn::after {
-            content:"";
-            position:absolute;
-            top:3px;
-            left:3px;
-            width:16px;
-            height:16px;
-            background:#aaa;
-            border-radius:50%;
-            transition:.2s;
-        }
-        #sync-btn.active {
-            background:var(--accent);
-        }
-        #sync-btn.active::after {
-            left:22px;
-            background:#fff;
-        }
-
-        /* Graph Canvas */
-        canvas {
-            width:100% !important;
-            height:240px !important;
-        }
-
-    </style>
-
-    <div id="nexus-trigger">≡</div>
-
-    <div id="drawer">
-        <div id="drawer-header">
-            WAR NEXUS — Tactical UI 3.0.3
-            <span id="drawer-close">✕</span>
-        </div>
-
-        <div id="tabs">
-            <button data-tab="overview" class="active">Overview</button>
-            <button data-tab="chain">Chain</button>
-            <button data-tab="enemy">Enemy</button>
-            <button data-tab="faction">Faction</button>
-            <button data-tab="ai">AI</button>
-            <button data-tab="logs">Logs</button>
-        </div>
-
-        <div id="panels">
-            <div id="panel-overview" class="panel active"></div>
-            <div id="panel-chain" class="panel"></div>
-            <div id="panel-enemy" class="panel"></div>
-            <div id="panel-faction" class="panel"></div>
-            <div id="panel-ai" class="panel"></div>
-            <div id="panel-logs" class="panel"></div>
-        </div>
-    </div>
-    `;
-};
-
-/* ============================================================================
-   EVENT BINDINGS
-   ============================================================================
-*/
-Major.bindEvents = function(){
-    const trigger = this.shadow.querySelector("#nexus-trigger");
-    const drawer = this.shadow.querySelector("#drawer");
-    const close = this.shadow.querySelector("#drawer-close");
-
-    trigger.onclick = () => this.toggleDrawer();
-    close.onclick = () => drawer.classList.remove("open");
-
-    // Tabs
-    this.shadow.querySelectorAll("#tabs button").forEach(btn=>{
-        btn.onclick = () => {
-            this.setTab(btn.dataset.tab);
-        };
-    });
-
-    // AI input
-    this.shadow.addEventListener("keydown", e=>{
-        if (e.target.id === "ai-input" && e.key === "Enter"){
-            this.sendAI();
-        }
-    });
-};
-
-/* ============================================================================
-   DRAWER CONTROL
-   ============================================================================
-*/
-Major.toggleDrawer = function(){
-    const d = this.shadow.querySelector("#drawer");
-    d.classList.toggle("open");
-};
-
-/* ============================================================================
-   TAB SWITCHER
-   ============================================================================
-*/
-Major.setTab = function(tab){
-    this.shadow.querySelectorAll("#tabs button").forEach(btn=>{
-        btn.classList.toggle("active", btn.dataset.tab === tab);
-    });
-
-    this.shadow.querySelectorAll(".panel").forEach(p=>{
-        p.classList.toggle("active", p.id === "panel-"+tab);
-    });
-
-    this.renderTab(tab);
-};
-
-/* ============================================================================
-   NEXUS EVENT STREAMS
-   ============================================================================
-*/
-Major.bindNexusEvents = function(){
-    this.nexus.events.on("SITREP_UPDATE", data => {
-        this.data.user = data.user || {};
-        this.data.faction = data.faction || {};
-        this.data.chain = data.chain || {};
-        this.data.targets = data.ai?.topTargets || [];
-        this.data.ai = data.ai || {};
-        this.data.enemies = data.enemyMembers || [];
-        this.data.factionMembers = data.factionMembers || [];
-
-        this.processRealtimeChain();
-        this.renderActiveTab();
-    });
-
-    this.nexus.events.on("ASK_COLONEL_RESPONSE", msg=>{
-        this.data.aiMessages.push({ from:"colonel", text:msg });
-        this.renderAITab();
-    });
-
-    this.nexus.events.on("SHARED_TARGETS_UPDATED", list=>{
-        this.data.sharedTargets = list;
-        this.renderFactionTab();
-    });
-
-    this.nexus.events.on("COMMANDER_ORDERS", ord=>{
-        this.data.orders = ord;
-        this.renderFactionTab();
-    });
-
-    const oldLog = this.nexus.log;
-    this.nexus.log = txt=>{
-        this.pushLog(txt);
-        oldLog(txt);
-    };
-};
-
-/* ============================================================================
-   LOGGING
-   ============================================================================
-*/
-Major.pushLog = function(msg, level="info"){
-    const t = new Date().toLocaleTimeString();
-    this.data.logs.push({ ts:t, msg, level });
-
-    if (this.data.logs.length > this.MAX_LOGS)
-        this.data.logs.splice(0, 50);
-
-    if (this.currentTab === "logs") this.renderLogsTab();
-};
-
-/* ============================================================================
-   REALTIME CHAIN PROCESSING
-   ============================================================================
-*/
-Major.processRealtimeChain = function(){
-    const now = Date.now();
-    const hits = this.data.chain?.hits || 0;
-
-    this.buffers.chainRealtime.push({ x: now, y: hits });
-
-    if (this.buffers.chainRealtime.length > 180)
-        this.buffers.chainRealtime.splice(0, 60);
-
-    // Chain watcher
-    const light = this.shadow.querySelector("#chain-light");
-    if (!light) return;
-    light.classList.toggle("active", hits > 0);
-};
-
-/* ============================================================================
-   TAB RENDER DISPATCHER
-   ============================================================================
-*/
-Major.renderTab = function(tab){
-    if (tab === "overview") return this.renderOverviewTab();
-    if (tab === "chain") return this.renderChainTab();
-    if (tab === "enemy") return this.renderEnemyTab();
-    if (tab === "faction") return this.renderFactionTab();
-    if (tab === "ai") return this.renderAITab();
-    if (tab === "logs") return this.renderLogsTab();
-};
-
-Major.renderActiveTab = function(){
-    const active = this.shadow.querySelector("#tabs button.active");
-    if (active) this.renderTab(active.dataset.tab);
-};
-
-/* ============================================================================
-   OVERVIEW TAB
-   ============================================================================
-*/
-Major.renderOverviewTab = function(){
-    const p = this.shadow.querySelector("#panel-overview");
-    if (!p) return;
-
-    const u = this.data.user;
-
-    p.innerHTML = `
-        <div class="card">
-            <h3 style="color:var(--accent); margin-bottom:8px;">Operator</h3>
-            <table>
-                <tr><th>Name</th><td>${u.name||"?"}</td></tr>
-                <tr><th>Level</th><td>${u.level||"?"}</td></tr>
-                <tr><th>Status</th><td>${u.status||"?"}</td></tr>
-                <tr><th>HP</th><td>${u.hp||0}/${u.max_hp||0}</td></tr>
-                <tr><th>Energy</th><td>${u.bars?.energy?.current||0}/${u.bars?.energy?.maximum||0}</td></tr>
-                <tr><th>Nerve</th><td>${u.bars?.nerve?.current||0}/${u.bars?.nerve?.maximum||0}</td></tr>
-            </table>
-        </div>
-
-        <div class="card">
-            <h3 style="color:var(--accent); margin-bottom:8px;">Chain Summary</h3>
-            <table>
-                <tr><th>Hits</th><td>${this.data.chain.hits||0}</td></tr>
-                <tr><th>Timeout</th><td>${this.data.chain.timeout||0}s</td></tr>
-                <tr><th>Modifier</th><td>${this.data.chain.modifier||1}x</td></tr>
-            </table>
-        </div>
-
-        <div class="card">
-            <h3 style="color:var(--accent); margin-bottom:8px;">AI Summary</h3>
-            <div>${this.data.ai.summary?.join("<br>") || "No summary."}</div>
-        </div>
-    `;
-};
-
-/* ============================================================================
-   CHAIN TAB
-   ============================================================================
-*/
-Major.renderChainTab = function(){
-    const p = this.shadow.querySelector("#panel-chain");
-    if (!p) return;
-
-    p.innerHTML = `
-        <div id="chain-watcher">
-            <div>Chain Watcher</div>
-            <div id="chain-light" class="${(this.data.chain.hits||0)>0?'active':''}"></div>
-        </div>
-
-        <div class="card">
-            <h3 style="color:var(--accent); margin-bottom:8px;">Real-Time Chain</h3>
-            <canvas id="chainRealtimeGraph"></canvas>
-        </div>
-
-        <div class="card">
-            <h3 style="color:var(--accent2); margin-bottom:8px;">Chain History</h3>
-            <canvas id="chainHistoryGraph"></canvas>
-        </div>
-
-        <div class="card">
-            <h3 style="color:var(--accent); margin-bottom:8px;">Chain Info</h3>
-            <table>
-                <tr><th>Hits</th><td>${this.data.chain.hits||0}</td></tr>
-                <tr><th>Timeout</th><td>${this.data.chain.timeout||0}s</td></tr>
-                <tr><th>Modifier</th><td>${this.data.chain.modifier||1}x</td></tr>
-                <tr><th>Cooldown</th><td>${this.data.chain.cooldown||0}s</td></tr>
-            </table>
-        </div>
-    `;
-
-    this.buildChainRealtimeGraph();
-    this.buildChainHistoryGraph();
-};
-
-/* ============================================================================
-   BUILD REALTIME CHAIN GRAPH
-   ============================================================================
-*/
-Major.buildChainRealtimeGraph = function(){
-    const canvas = this.shadow.querySelector("#chainRealtimeGraph");
-    if (!canvas) return;
-
-    if (this.graph.chainRealtime){
-        this.graph.chainRealtime.destroy();
-    }
-
-    this.graph.chainRealtime = new Chart(canvas.getContext("2d"), {
-        type: "line",
-        data: {
-            datasets: [{
-                label: "Chain Hits",
-                data: this.buffers.chainRealtime,
-                borderColor: "#4ac3ff",
-                borderWidth: 2,
-                pointRadius: 0
-            }]
-        },
-        options: {
-            animation: false,
-            scales: {
-                x: {
-                    type: "time",
-                    time: { unit: "minute" },
-                    ticks: { color: "#888" }
-                },
-                y: {
-                    ticks: { color: "#888" }
-                }
-            },
-            plugins: {
-                legend: { display: false }
-            }
-        }
-    });
-};
-
-/* ============================================================================
-   BUILD CHAIN HISTORY GRAPH (Colonel memory)
-   ============================================================================
-*/
-Major.buildChainHistoryGraph = function(){
-    const canvas = this.shadow.querySelector("#chainHistoryGraph");
-    if (!canvas) return;
-
-    const pace = this.nexus.colonel?.memory?.chain?.pace || [];
-    const data = pace.map(x => ({ x: x.ts, y: x.hits }));
-
-    if (this.graph.chainHistory){
-        this.graph.chainHistory.destroy();
-    }
-
-    this.graph.chainHistory = new Chart(canvas.getContext("2d"), {
-        type: "line",
-        data: {
-            datasets: [{
-                label: "Chain Hits (Historical)",
-                data,
-                borderColor: "#8affef",
-                borderWidth: 2,
-                pointRadius: 0
-            }]
-        },
-        options: {
-            animation: false,
-            scales: {
-                x: {
-                    type: "time",
-                    time: { unit: "hour" },
-                    ticks: { color: "#888" }
-                },
-                y: {
-                    ticks: { color: "#888" }
-                }
-            },
-            plugins: { legend: { display: false } }
-        }
-    });
-};
-
-/* ============================================================================
-   ENEMY TAB
-   ============================================================================
-*/
-Major.renderEnemyTab = function(){
-    const p = this.shadow.querySelector("#panel-enemy");
-    if (!p) return;
-
-    const list = [...this.data.enemies];
-    list.sort((a,b)=>b.level - a.level);
-
-    const rows = list.map(e => `
-        <tr>
-            <td>${e.online ? "🟢" : "⚫"}</td>
-            <td>${e.name}</td>
-            <td>${e.level}</td>
-            <td>${e.status}</td>
-            <td>${e.estimatedTotal ? e.estimatedTotal.toLocaleString() : "?"}</td>
-            <td><a class="btn" target="_blank" href="https://www.torn.com/loader.php?sid=attack&user2ID=${e.id}">Attack</a></td>
-        </tr>
-    `).join("");
-
-    p.innerHTML = `
-        <div class="card">
-            <h3 style="color:var(--accent)">Enemy Targets</h3>
-            <table>
-                <thead>
-                    <tr>
-                        <th></th><th>Name</th><th>Lvl</th><th>Status</th><th>Est Stats</th><th></th>
-                    </tr>
-                </thead>
-                <tbody>${rows}</tbody>
-            </table>
-        </div>
-
-        <div class="card">
-            <h3 style="color:var(--accent2)">Enemy Activity Heatmap</h3>
-            ${this.renderEnemyHeatmap()}
-        </div>
-    `;
-};
-
-/* ============================================================================
-   HEATMAP (Enemy Online Activity)
-   ============================================================================
-*/
-Major.renderEnemyHeatmap = function(){
-    const buckets = this.data.enemyActivityBuckets;
-
-    const cells = buckets.map((v,i)=>{
-        const intensity = Math.min(1, v / 10);
-        return `
-            <div style="
-                width:100%;
-                height:18px;
-                background:rgba(74,195,255,${intensity});
-                border-radius:3px;
-            "></div>
-        `;
-    }).join("");
-
-    return `
-        <div style="
-            display:grid;
-            grid-template-columns:repeat(24,1fr);
-            gap:2px;">
-            ${cells}
-        </div>
-    `;
-};
-
-/* ============================================================================
-   FACTION TAB
-   ============================================================================
-*/
-Major.renderFactionTab = function(){
-    const p = this.shadow.querySelector("#panel-faction");
-    if (!p) return;
-
-    const list = [...this.data.factionMembers];
-    list.sort((a,b)=>b.level - a.level);
-
-    const rows = list.map(m=>`
-        <tr>
-            <td>${m.online?"🟢":"⚫"}</td>
-            <td>${m.name}</td>
-            <td>${m.level}</td>
-            <td>${m.status}</td>
-            <td>${m.last_action?.relative || ""}</td>
-        </tr>
-    `).join("");
-
-    p.innerHTML = `
-        <div id="sync-toggle" class="card">
-            <div>Faction Sync</div>
-            <div id="sync-btn" class="${this.flags.syncEnabled ? "active":""}"></div>
-        </div>
-
-        <div class="card">
-            <h3 style="color:var(--accent)">Faction Members</h3>
-            <table>
-                <thead>
-                    <tr><th></th><th>Name</th><th>Lvl</th><th>Status</th><th>Last Action</th></tr>
-                </thead>
-                <tbody>${rows}</tbody>
-            </table>
-        </div>
-
-        <div class="card">
-            <h3 style="color:var(--accent2)">Commander Orders</h3>
-            <pre style="
-                white-space:pre-wrap;
-                font-size:12px;
-                font-family:Consolas,monospace;">
-${JSON.stringify(this.data.orders,null,2)}
-            </pre>
-        </div>
-
-        <div class="card">
-            <h3 style="color:var(--accent2)">Shared Targets</h3>
-            <ul style="padding-left:12px;">
-                ${this.data.sharedTargets.map(t=>`<li>${t.name}</li>`).join("")}
-            </ul>
-        </div>
-    `;
-
-    // bind sync toggle
-    const syncBtn = this.shadow.querySelector("#sync-btn");
-    syncBtn.onclick = ()=>{
-        this.flags.syncEnabled = !this.flags.syncEnabled;
-        syncBtn.classList.toggle("active", this.flags.syncEnabled);
-        this.nexus.log("Faction sync " + (this.flags.syncEnabled?"ENABLED":"DISABLED"));
-    };
-};
-
-/* ============================================================================
-   AI TAB
-   ============================================================================
-*/
-Major.renderAITab = function(){
-    const p = this.shadow.querySelector("#panel-ai");
-    if (!p) return;
-
-    const history = this.data.aiMessages.map(msg=>`
-        <div class="${msg.from === "user" ? "ai-user" : "ai-colonel"}">
-            ${escapeHTML(msg.text)}
-        </div>
-    `).join("");
-
-    p.innerHTML = `
-        <div id="ai-console">
-            <div id="ai-log">${history}</div>
-            <input id="ai-input" placeholder="Ask the Colonel..." />
-        </div>
-    `;
-
-    const logBox = this.shadow.querySelector("#ai-log");
-    logBox.scrollTop = logBox.scrollHeight;
-};
-
-/* ============================================================================
-   SEND AI MESSAGE
-   ============================================================================
-*/
-Major.sendAI = function(){
-    const input = this.shadow.querySelector("#ai-input");
-    if (!input) return;
-
-    const msg = input.value.trim();
-    if (!msg) return;
-    input.value = "";
-
-    this.data.aiMessages.push({ from:"user", text:msg });
-    this.nexus.events.emit("ASK_COLONEL", { question: msg });
-    this.renderAITab();
-};
-
-/* ============================================================================
-   LOGS TAB
-   ============================================================================
-*/
-Major.renderLogsTab = function(){
-    const p = this.shadow.querySelector("#panel-logs");
-    if (!p) return;
-
-    const lines = this.data.logs.map(l=>`
-        <div style="color:${l.level==="error"?"var(--bad)":"var(--accent)"}; font-size:11px;">
-            [${l.ts}] ${escapeHTML(l.msg)}
-        </div>
-    `).join("");
-
-    p.innerHTML = `
-        <div class="card">
-            <h3 style="color:var(--accent)">System Logs</h3>
-            <div style="
-                background:#111;
-                border:1px solid #333;
-                padding:10px;
-                height:300px;
-                overflow-y:auto;
-                font-size:11px;
-                font-family:Consolas,monospace;">
-                ${lines}
+        <div id="major-root">
+            <div id="sidebar">
+                <div class="tab-btn" data-tab="overview">Overview</div>
+                <div class="tab-btn" data-tab="chain">Chain</div>
+                <div class="tab-btn" data-tab="enemy">Enemy</div>
+                <div class="tab-btn" data-tab="faction">Faction</div>
+                <div class="tab-btn" data-tab="war">War</div>
+                <div class="tab-btn" data-tab="predictions">Predictions</div>
+                <div class="tab-btn" data-tab="targets">Targets</div>
+                <div class="tab-btn" data-tab="colonel">Colonel</div>
+            </div>
+
+            <div id="content">
+                <div class="tabview" id="tab-overview"></div>
+                <div class="tabview" id="tab-chain"></div>
+                <div class="tabview" id="tab-enemy"></div>
+                <div class="tabview" id="tab-faction"></div>
+                <div class="tabview" id="tab-war"></div>
+                <div class="tabview" id="tab-predictions"></div>
+                <div class="tabview" id="tab-targets"></div>
+                <div class="tabview" id="tab-colonel"></div>
             </div>
         </div>
     `;
 };
 
 /* ============================================================================
-   UTILITY: Escape HTML
-   ============================================================================
-*/
-function escapeHTML(x){
-    return String(x).replace(/[<>&]/g, m=>{
-        return {"<":"&lt;",">":"&gt;","&":"&amp;"}[m];
+   STYLES
+   ============================================================================ */
+Major.applyStyles = function(){
+    const css = `
+        :host {
+            all: initial;
+        }
+
+        #major-root {
+            position: fixed;
+            top: 70px;
+            right: 10px;
+            bottom: 10px;
+            width: 920px;
+            max-width: 95vw;
+            background: #0c0c0c;
+            border: 1px solid #111;
+            border-radius: 6px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.7);
+            display: flex;
+            overflow: hidden;
+            z-index: 2147483640;
+            font-family: Segoe UI, Arial, sans-serif;
+            color: #ddd;
+        }
+
+        #sidebar {
+            width: 140px;
+            background: #050505;
+            border-right: 1px solid #111;
+            display: flex;
+            flex-direction: column;
+            padding-top: 10px;
+        }
+
+        .tab-btn {
+            padding: 14px 10px;
+            cursor: pointer;
+            font-size: 14px;
+            color: #bbb;
+            user-select: none;
+            border-bottom: 1px solid #111;
+        }
+        .tab-btn:hover {
+            background: #111;
+            color: #4ac3ff;
+        }
+        .tab-btn.active {
+            background: #1a1a1a;
+            color: #4ac3ff;
+            font-weight: bold;
+        }
+
+        #content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 15px;
+        }
+
+        .tabview {
+            display: none;
+        }
+
+        .tabview.active {
+            display: block;
+            animation: fadeIn 0.2s ease;
+        }
+
+        @keyframes fadeIn {
+            from {opacity: 0;}
+            to   {opacity: 1;}
+        }
+
+        .card {
+            background: #121212;
+            border: 1px solid #1e1e1e;
+            border-radius: 5px;
+            padding: 14px;
+            margin-bottom: 16px;
+            box-shadow: 0 0 8px rgba(0,0,0,0.5);
+        }
+
+        .card h3 {
+            margin: 0 0 10px;
+            color: #4ac3ff;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            margin-top: 6px;
+        }
+        table th, table td {
+            padding: 4px 6px;
+            border-bottom: 1px solid #1a1a1a;
+            text-align: left;
+        }
+        table th {
+            color: #4ac3ff;
+            width: 140px;
+        }
+
+        /* Colonel terminal */
+        #colonel-terminal {
+            width: 100%;
+            height: 300px;
+            background: #000;
+            border: 1px solid #222;
+            overflow-y: auto;
+            color: #4ac3ff;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 12px;
+            margin-bottom: 10px;
+        }
+
+        #colonel-input {
+            width: 100%;
+            padding: 8px;
+            background: #111;
+            border: 1px solid #333;
+            color: #eee;
+            border-radius: 3px;
+        }
+
+        /* Predictions panel */
+        .pred-block {
+            margin-bottom: 14px;
+            padding: 10px;
+            background: #111;
+            border-left: 3px solid #4ac3ff;
+        }
+
+        .subtabs {
+            margin-top: 10px;
+            display: flex;
+            border-bottom: 1px solid #222;
+        }
+        .subtab-btn {
+            padding: 8px 12px;
+            cursor: pointer;
+            font-size: 13px;
+            color: #bbb;
+            margin-right: 5px;
+        }
+        .subtab-btn.active {
+            background: #1a1a1a;
+            color: #4ac3ff;
+            font-weight: bold;
+        }
+
+        .subtabview {
+            display: none;
+        }
+        .subtabview.active {
+            display: block;
+        }
+    `;
+
+    const style = document.createElement("style");
+    style.textContent = css;
+    this.shadow.appendChild(style);
+};
+
+/* ============================================================================
+   EVENT BINDINGS
+   ============================================================================ */
+Major.bindEvents = function(){
+
+    // TAB SWITCH
+    this.shadow.querySelectorAll(".tab-btn").forEach(btn=>{
+        btn.onclick = ()=>{
+            this.activeTab = btn.dataset.tab;
+            this.renderActiveTab();
+        };
     });
-}
+
+    // SITREP (from Colonel)
+    this.nexus.events.on("SITREP_UPDATE", data => {
+        this.data.user        = data.user   || {};
+        this.data.stats       = data.stats  || {};
+        this.data.bars        = data.bars   || {};
+        this.data.chain       = data.chain  || {};
+        this.data.faction     = data.faction || {};
+        this.data.factionMembers = data.factionMembers || [];
+        this.data.enemies     = data.enemies || [];
+        this.data.wars        = data.wars   || [];
+        this.data.predictions = data.predictions || {};
+
+        this.renderActiveTab();
+    });
+
+    // COLONEL RESPONSES
+    this.nexus.events.on("ASK_COLONEL_RESPONSE", payload => {
+        const term = this.shadow.querySelector("#colonel-terminal");
+        if (!term) return;
+
+        const div = document.createElement("div");
+        div.style.color = "#4acd7a";
+        div.textContent = payload.answer;
+        term.appendChild(div);
+        term.scrollTop = term.scrollHeight;
+    });
+};
+
+/* ============================================================================
+   RENDER ACTIVE TAB
+   ============================================================================ */
+Major.renderActiveTab = function(){
+    this.shadow.querySelectorAll(".tab-btn").forEach(btn=>{
+        btn.classList.toggle("active", btn.dataset.tab === this.activeTab);
+    });
+    this.shadow.querySelectorAll(".tabview").forEach(v=>{
+        v.classList.remove("active");
+    });
+
+    const pane = this.shadow.querySelector("#tab-" + this.activeTab);
+    if (!pane) return;
+
+    pane.classList.add("active");
+
+    switch(this.activeTab){
+        case "overview":    return this.renderOverview(pane);
+        case "chain":       return this.renderChain(pane);
+        case "enemy":       return this.renderEnemy(pane);
+        case "faction":     return this.renderFaction(pane);
+        case "war":         return this.renderWar(pane);
+        case "predictions": return this.renderPredictions(pane);
+        case "targets":     return this.renderTargets(pane);
+        case "colonel":     return this.renderColonel(pane);
+    }
+};
+
+/* ============================================================================
+   OVERVIEW TAB
+   ============================================================================ */
+Major.renderOverview = function(p){
+    const u  = this.data.user;
+    const ch = this.data.chain;
+    const w  = this.data.wars[0] || {};
+    const pred = this.data.predictions || {};
+
+    p.innerHTML = `
+        <div class="card">
+            <h3>Operator</h3>
+            <table>
+                <tr><th>Name</th><td>${u.name||"?"}</td></tr>
+                <tr><th>Level</th><td>${u.level||"?"}</td></tr>
+                <tr><th>Status</th><td>${u.status?.description || "?"}</td></tr>
+                <tr><th>Health</th><td>${(this.data.bars.life?.current||0)}/${(this.data.bars.life?.maximum||0)}</td></tr>
+            </table>
+        </div>
+
+        <div class="card">
+            <h3>Chain Snapshot</h3>
+            <table>
+                <tr><th>Hits</th><td>${ch.current||0}</td></tr>
+                <tr><th>Timeout</th><td>${ch.timeout||0}s</td></tr>
+                <tr><th>Modifier</th><td>x${ch.modifier||1}</td></tr>
+            </table>
+        </div>
+
+        <div class="card">
+            <h3>War Snapshot</h3>
+            <table>
+                <tr><th>Status</th><td>${w.war_id ? "Active" : "None"}</td></tr>
+                <tr><th>Score</th><td>${w.score||0}</td></tr>
+                <tr><th>Respect</th><td>${w.respect||0}</td></tr>
+            </table>
+        </div>
+
+        <div class="card">
+            <h3>Colonel Predictions</h3>
+            <div class="pred-block">
+                <strong>Chain:</strong><br>${pred.chain?.summary || "No chain prediction."}
+            </div>
+            <div class="pred-block">
+                <strong>War:</strong><br>${pred.war?.summary || "No war prediction."}
+            </div>
+            <div class="pred-block">
+                <strong>Enemy Activity:</strong><br>${pred.enemies?.summary || "No enemy prediction."}
+            </div>
+        </div>
+    `;
+};
+    /* ============================================================================
+   CHAIN TAB
+   ============================================================================ */
+Major.renderChain = function(p){
+    const ch = this.data.chain;
+    const pred = this.data.predictions.chain || {};
+
+    p.innerHTML = `
+        <div class="card">
+            <h3>Chain Status</h3>
+            <table>
+                <tr><th>Current Hits</th><td>${ch.current||0}</td></tr>
+                <tr><th>Max Hits</th><td>${ch.max||0}</td></tr>
+                <tr><th>Timeout</th><td>${ch.timeout||0}s</td></tr>
+                <tr><th>Modifier</th><td>x${ch.modifier||1}</td></tr>
+            </table>
+        </div>
+
+        <div class="card">
+            <h3>Chain Predictions</h3>
+            <div class="pred-block">
+                ${pred.summary || "Insufficient chain history for prediction."}
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Chain Pace (Hits / Minute)</h3>
+            <canvas id="chain-pace-chart" height="120"></canvas>
+        </div>
+
+        <div class="card">
+            <h3>Chain Progress (Hits Over Time)</h3>
+            <canvas id="chain-progress-chart" height="120"></canvas>
+        </div>
+    `;
+
+    this.renderChainCharts();
+};
+
+/* ============================================================================
+   RENDER CHAIN CHARTS
+   ============================================================================ */
+Major.renderChainCharts = function(){
+    const hist = this.nexus.officers?.Colonel?.memory?.chainHistory || [];
+    if (!hist.length) return;
+
+    const labels = hist.map(h => new Date(h.ts).toLocaleTimeString());
+    const hits   = hist.map(h => h.hits);
+
+    // CHAIN PROGRESS
+    const ctx1 = this.shadow.querySelector("#chain-progress-chart")?.getContext("2d");
+    if (ctx1){
+        if (this.charts.chainProgress) this.charts.chainProgress.destroy();
+        this.charts.chainProgress = new Chart(ctx1, {
+            type: "line",
+            data: {
+                labels,
+                datasets: [{
+                    label: "Hits",
+                    data: hits,
+                    borderColor: "#4ac3ff",
+                    backgroundColor: "rgba(74,195,255,0.1)",
+                    tension: 0.2
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { labels: { color: "#ccc" } } },
+                scales: {
+                    x: { ticks: { color: "#aaa" } },
+                    y: { ticks: { color: "#aaa" } }
+                }
+            }
+        });
+    }
+
+    // CHAIN PACE
+    const paceLabels = [];
+    const paceValues = [];
+    for (let i=1; i<hist.length; i++){
+        const dt = (hist[i].ts - hist[i-1].ts) / 60000;
+        const dh = hist[i].hits - hist[i-1].hits;
+        paceLabels.push(new Date(hist[i].ts).toLocaleTimeString());
+        paceValues.push(dt > 0 ? dh/dt : 0);
+    }
+
+    const ctx2 = this.shadow.querySelector("#chain-pace-chart")?.getContext("2d");
+    if (ctx2){
+        if (this.charts.chainPace) this.charts.chainPace.destroy();
+        this.charts.chainPace = new Chart(ctx2,{
+            type:"bar",
+            data:{
+                labels: paceLabels,
+                datasets:[{
+                    label:"Hits/Min",
+                    data: paceValues,
+                    backgroundColor:"#4ac3ff"
+                }]
+            },
+            options:{
+                responsive:true,
+                plugins:{ legend:{ labels:{ color:"#ccc" } } },
+                scales:{
+                    x:{ ticks:{ color:"#aaa" } },
+                    y:{ ticks:{ color:"#aaa" } }
+                }
+            }
+        });
+    }
+};
+
+/* ============================================================================
+   ENEMY TAB
+   ============================================================================ */
+Major.renderEnemy = function(p){
+    const enemies = this.data.enemies || [];
+    const colMem = this.nexus.officers?.Colonel?.memory?.enemies || {};
+
+    let rows = enemies.map(e=>{
+        const mem = colMem[e.id] || {};
+        const est = mem.est || this.nexus.officers.Colonel.estimateByLevel(e.level);
+        const conf = (mem.confidence || 0).toFixed(2);
+        const status = e.status?.state || "Unknown";
+
+        return `
+        <tr>
+            <td>${e.name}</td>
+            <td>${e.level}</td>
+            <td>${status}</td>
+            <td>${est.toLocaleString()}</td>
+            <td>${conf}</td>
+            <td><button class="enemy-info-btn" data-id="${e.id}">Info</button></td>
+        </tr>`;
+    }).join("");
+
+    p.innerHTML = `
+        <div class="card">
+            <h3>Enemy Operatives</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Name</th><th>Lvl</th><th>Status</th><th>Est Stats</th><th>Conf</th><th></th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>
+        <div id="enemy-info-panel"></div>
+    `;
+
+    // Add event listeners for info buttons
+    p.querySelectorAll(".enemy-info-btn").forEach(btn=>{
+        btn.onclick = ()=>{
+            const id = btn.dataset.id;
+            this.showEnemyInfo(id);
+        };
+    });
+};
+
+/* ============================================================================
+   ENEMY INFO PANEL
+   ============================================================================ */
+Major.showEnemyInfo = function(id){
+    const p = this.shadow.querySelector("#enemy-info-panel");
+    const enemies = this.data.enemies || [];
+    const target = enemies.find(e=>e.id == id);
+    if (!target){
+        p.innerHTML = "<div class='card'>No data for enemy.</div>";
+        return;
+    }
+
+    const mem = this.nexus.officers.Colonel.memory.enemies[id] || {};
+    const est = mem.est || this.nexus.officers.Colonel.estimateByLevel(target.level);
+
+    p.innerHTML = `
+        <div class="card">
+            <h3>${target.name} — Intel</h3>
+            <table>
+                <tr><th>Level</th><td>${target.level}</td></tr>
+                <tr><th>Status</th><td>${target.status?.state}</td></tr>
+                <tr><th>Est. Stats</th><td>${est.toLocaleString()}</td></tr>
+                <tr><th>Confidence</th><td>${(mem.confidence||0).toFixed(2)}</td></tr>
+                <tr><th>Last Seen</th><td>${mem.lastSeen ? new Date(mem.lastSeen).toLocaleString() : "unknown"}</td></tr>
+                <tr><th>Fights Logged</th><td>${mem.fights || 0}</td></tr>
+            </table>
+        </div>
+    `;
+};
+
+/* ============================================================================
+   FACTION TAB
+   ============================================================================ */
+Major.renderFaction = function(p){
+    const f = this.data.faction;
+    const mem = this.data.factionMembers;
+
+    const online = mem.filter(m=>m.status?.state==="Online").length;
+    const hosp   = mem.filter(m=>m.status?.state==="Hospitalized").length;
+    const travel = mem.filter(m=>m.status?.state==="Traveling").length;
+
+    let rows = mem.map(m=>{
+        return `
+        <tr>
+            <td>${m.name}</td>
+            <td>${m.level}</td>
+            <td>${m.status?.state}</td>
+            <td>${m.last_action?.relative || ""}</td>
+        </tr>`;
+    }).join("");
+
+    p.innerHTML = `
+        <div class="card">
+            <h3>Faction Info</h3>
+            <table>
+                <tr><th>Name</th><td>${f.name||"?"}</td></tr>
+                <tr><th>Respect</th><td>${f.respect||0}</td></tr>
+                <tr><th>Members</th><td>${mem.length}</td></tr>
+                <tr><th>Online</th><td>${online}</td></tr>
+                <tr><th>Hospital</th><td>${hosp}</td></tr>
+                <tr><th>Travel</th><td>${travel}</td></tr>
+            </table>
+        </div>
+
+        <div class="card">
+            <h3>Members</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Name</th><th>Lvl</th><th>Status</th><th>Last Action</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>
+    `;
+};
+
+/* ============================================================================
+   WAR TAB
+   ============================================================================ */
+Major.renderWar = function(p){
+    const w = this.data.wars[0] || {};
+    const pred = this.data.predictions.war || {};
+
+    p.innerHTML = `
+        <div class="card">
+            <h3>War Status</h3>
+            <table>
+                <tr><th>Opponent</th><td>${w.opponent_name||"None"}</td></tr>
+                <tr><th>Score</th><td>${w.score||0}</td></tr>
+                <tr><th>Respect</th><td>${w.respect||0}</td></tr>
+            </table>
+        </div>
+
+        <div class="card">
+            <h3>War Momentum</h3>
+            <div class="pred-block">${pred.summary || "No momentum data."}</div>
+        </div>
+
+        <div class="card">
+            <h3>Respect Pace</h3>
+            <canvas id="war-respect-chart" height="100"></canvas>
+        </div>
+
+        <div class="card">
+            <h3>Score Pace</h3>
+            <canvas id="war-score-chart" height="100"></canvas>
+        </div>
+    `;
+
+    this.renderWarCharts();
+};
+
+/* ============================================================================
+   WAR CHARTS
+   ============================================================================ */
+Major.renderWarCharts = function(){
+    const hist = this.nexus.officers.Colonel.memory.warHistory || [];
+    if (!hist.length) return;
+
+    const labels = hist.map(h => new Date(h.ts).toLocaleTimeString());
+    const respect = hist.map(h => h.respect);
+    const score = hist.map(h => h.score);
+
+    // Respect Chart
+    const ctx1 = this.shadow.querySelector("#war-respect-chart")?.getContext("2d");
+    if (ctx1){
+        if (this.charts.warRespect) this.charts.warRespect.destroy();
+        this.charts.warRespect = new Chart(ctx1,{
+            type:"line",
+            data:{
+                labels,
+                datasets:[{
+                    label:"Respect",
+                    data:respect,
+                    borderColor:"#4ac3ff",
+                    tension:0.2
+                }]
+            },
+            options:{
+                responsive:true,
+                plugins:{ legend:{ labels:{ color:"#ccc" } } },
+                scales:{
+                    x:{ ticks:{ color:"#aaa" } },
+                    y:{ ticks:{ color:"#aaa" } }
+                }
+            }
+        });
+    }
+
+    // Score Chart
+    const ctx2 = this.shadow.querySelector("#war-score-chart")?.getContext("2d");
+    if (ctx2){
+        if (this.charts.warScore) this.charts.warScore.destroy();
+        this.charts.warScore = new Chart(ctx2,{
+            type:"line",
+            data:{
+                labels,
+                datasets:[{
+                    label:"Score",
+                    data:score,
+                    borderColor:"#4ac3ff",
+                    tension:0.2
+                }]
+            },
+            options:{
+                responsive:true,
+                plugins:{ legend:{ labels:{ color:"#ccc" } } },
+                scales:{
+                    x:{ ticks:{ color:"#aaa" } },
+                    y:{ ticks:{ color:"#aaa" } }
+                }
+            }
+        });
+    }
+};
+    /* ============================================================================
+   PREDICTIONS TAB
+   ============================================================================ */
+Major.renderPredictions = function(p){
+    const pred = this.data.predictions || {};
+
+    p.innerHTML = `
+        <div class="card">
+            <h3>Chain Predictions</h3>
+            <div class="pred-block">${pred.chain?.summary || "No chain prediction."}</div>
+        </div>
+
+        <div class="card">
+            <h3>War Predictions</h3>
+            <div class="pred-block">${pred.war?.summary || "No war prediction."}</div>
+        </div>
+
+        <div class="card">
+            <h3>Enemy Activity Forecast</h3>
+            <div class="pred-block">${pred.enemies?.summary || "No enemy prediction."}</div>
+        </div>
+
+        <div class="card">
+            <h3>Projected Faction Activity</h3>
+            <div class="pred-block">${pred.members?.summary || "No member projection."}</div>
+        </div>
+    `;
+};
+
+/* ============================================================================
+   TARGETS TAB
+   ============================================================================ */
+Major.renderTargets = function(p){
+    p.innerHTML = `
+        <div class="card">
+            <h3>Target Selection</h3>
+            <div class="subtabs">
+                <div class="subtab-btn" data-sub="personal">Personal</div>
+                <div class="subtab-btn" data-sub="war">War</div>
+                <div class="subtab-btn" data-sub="shared">Shared</div>
+            </div>
+
+            <div id="sub-personal" class="subtabview"></div>
+            <div id="sub-war" class="subtabview"></div>
+            <div id="sub-shared" class="subtabview"></div>
+        </div>
+    `;
+
+    this.bindTargetSubtabs();
+    this.renderTargetSubtab("personal");
+};
+
+/* ============================================================================
+   TARGET SUBTAB SWITCHING
+   ============================================================================ */
+Major.bindTargetSubtabs = function(){
+    const btns = this.shadow.querySelectorAll(".subtab-btn");
+    btns.forEach(btn=>{
+        btn.onclick = ()=>{
+            const tab = btn.dataset.sub;
+            this.renderTargetSubtab(tab);
+
+            btns.forEach(b=>b.classList.remove("active"));
+            btn.classList.add("active");
+        };
+    });
+
+    // default
+    btns[0]?.classList.add("active");
+};
+
+/* ============================================================================
+   RENDER SUBTABS
+   ============================================================================ */
+Major.renderTargetSubtab = function(name){
+    this.shadow.querySelectorAll(".subtabview").forEach(x => x.classList.remove("active"));
+    const pane = this.shadow.querySelector("#sub-"+name);
+    if (!pane) return;
+
+    pane.classList.add("active");
+
+    if (name === "personal") return this.renderPersonalTargets(pane);
+    if (name === "war")      return this.renderWarTargets(pane);
+    if (name === "shared")   return this.renderSharedTargets(pane);
+};
+
+/* ============================================================================
+   PERSONAL TARGETS (direct from Colonel.evaluateTargets())
+   ============================================================================ */
+Major.renderPersonalTargets = function(p){
+    const Colonel = this.nexus.officers.Colonel;
+    const t = Colonel.evaluateTargets();
+
+    if (!t.length){
+        p.innerHTML = "<div class='card'>No enemy targets available.</div>";
+        return;
+    }
+
+    let rows = t.map(e=>{
+        const ratio = (Number(this.data.stats?.total)||1) / e.est;
+        return `
+        <tr>
+            <td>${e.name}</td>
+            <td>${e.level}</td>
+            <td>${e.online ? "Online" : "Offline"}</td>
+            <td>${e.est.toLocaleString()}</td>
+            <td>${ratio.toFixed(2)}x</td>
+            <td>${e.threat.label}</td>
+            <td><button class="target-info-btn" data-id="${e.id}">Info</button></td>
+        </tr>`;
+    }).join("");
+
+    p.innerHTML = `
+        <div class="card">
+            <h3>Personal Targets</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Name</th><th>Lvl</th><th>Status</th>
+                        <th>Est Stats</th><th>Ratio</th><th>Threat</th><th></th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>
+        <div id="personal-target-info"></div>
+    `;
+
+    p.querySelectorAll(".target-info-btn").forEach(btn=>{
+        btn.onclick = ()=>{
+            this.showPersonalTargetInfo(btn.dataset.id);
+        };
+    });
+};
+
+/* ============================================================================
+   PERSONAL TARGET INFO
+   ============================================================================ */
+Major.showPersonalTargetInfo = function(id){
+    const pane = this.shadow.querySelector("#personal-target-info");
+    const enemies = this.data.enemies;
+    const target = enemies.find(e=>e.id == id);
+    if (!target){
+        pane.innerHTML = "<div class='card'>No data.</div>";
+        return;
+    }
+
+    const Colonel = this.nexus.officers.Colonel;
+    const mem = Colonel.memory.enemies[id] || {};
+    const est = mem.est || Colonel.estimateByLevel(target.level);
+    const ratio = (Number(this.data.stats?.total)||1) / est;
+
+    pane.innerHTML = `
+        <div class="card">
+            <h3>${target.name} — Personal Target Intel</h3>
+            <table>
+                <tr><th>Level</th><td>${target.level}</td></tr>
+                <tr><th>Status</th><td>${target.status?.state}</td></tr>
+                <tr><th>Est. Stats</th><td>${est.toLocaleString()}</td></tr>
+                <tr><th>Ratio</th><td>${ratio.toFixed(2)}x</td></tr>
+                <tr><th>Threat</th><td>${Colonel.threatScore(target).label}</td></tr>
+            </table>
+        </div>
+    `;
+};
+
+/* ============================================================================
+   WAR TARGETS
+   ============================================================================ */
+Major.renderWarTargets = function(p){
+    const enemies = this.data.enemies || [];
+    const w = this.data.wars[0];
+
+    if (!w){
+        p.innerHTML = "<div class='card'>No active war.</div>";
+        return;
+    }
+
+    // Filter to enemies with hits in war history if possible
+    const warHits = this.nexus.officers.Colonel.memory.warHistory || [];
+    const recent = warHits.slice(-100);
+    const warEnemyIds = new Set(recent.map(h => h.attackerId).filter(Boolean));
+
+    const wEnemies = enemies.filter(e => warEnemyIds.has(e.id));
+
+    if (!wEnemies.length){
+        p.innerHTML = "<div class='card'>No known war participants.</div>";
+        return;
+    }
+
+    const Colonel = this.nexus.officers.Colonel;
+
+    let rows = wEnemies.map(e=>{
+        const mem = Colonel.memory.enemies[e.id] || {};
+        const est = mem.est || Colonel.estimateByLevel(e.level);
+        const threat = Colonel.threatScore(e).label;
+
+        return `
+        <tr>
+            <td>${e.name}</td>
+            <td>${e.level}</td>
+            <td>${e.status?.state}</td>
+            <td>${est.toLocaleString()}</td>
+            <td>${threat}</td>
+        </tr>`;
+    }).join("");
+
+    p.innerHTML = `
+        <div class="card">
+            <h3>War Targets (Active Participants)</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Name</th><th>Level</th><th>Status</th>
+                        <th>Est Stats</th><th>Threat</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>
+    `;
+};
+
+/* ============================================================================
+   SHARED TARGETS (stored locally)
+   ============================================================================ */
+Major.renderSharedTargets = function(p){
+    const stored = GM_getValue("WN_SHARED_TARGETS", "[]");
+    let targets = [];
+    try { targets = JSON.parse(stored); } catch {}
+
+    let rows = targets.map((t,i)=>{
+        return `
+        <tr>
+            <td>${t.name}</td>
+            <td>${t.id}</td>
+            <td><button class="shared-del" data-i="${i}">Remove</button></td>
+        </tr>`;
+    }).join("");
+
+    p.innerHTML = `
+        <div class="card">
+            <h3>Shared Target List</h3>
+            <table>
+                <thead>
+                    <tr><th>Name</th><th>ID</th><th></th></tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>
+
+            <h3 style="margin-top:15px;">Add Target</h3>
+            <input id="new-target-name" placeholder="Name" style="width:45%;padding:6px;margin-right:5px;">
+            <input id="new-target-id" placeholder="ID" style="width:30%;padding:6px;margin-right:5px;">
+            <button id="add-target-btn">Add</button>
+        </div>
+    `;
+
+    this.bindSharedTargetActions(p);
+};
+
+/* ============================================================================
+   BIND SHARED TARGET EVENTS
+   ============================================================================ */
+Major.bindSharedTargetActions = function(p){
+    // Remove
+    p.querySelectorAll(".shared-del").forEach(btn=>{
+        btn.onclick = ()=>{
+            const stored = GM_getValue("WN_SHARED_TARGETS", "[]");
+            let targets = [];
+            try { targets = JSON.parse(stored); } catch {}
+            targets.splice(btn.dataset.i, 1);
+            GM_setValue("WN_SHARED_TARGETS", JSON.stringify(targets));
+            this.renderTargetSubtab("shared");
+        };
+    });
+
+    // Add
+    p.querySelector("#add-target-btn").onclick = ()=>{
+        const name = p.querySelector("#new-target-name").value.trim();
+        const id = p.querySelector("#new-target-id").value.trim();
+        if (!name || !id) return;
+
+        const stored = GM_getValue("WN_SHARED_TARGETS", "[]");
+        let targets = [];
+        try { targets = JSON.parse(stored); } catch {}
+
+        targets.push({name, id});
+        GM_setValue("WN_SHARED_TARGETS", JSON.stringify(targets));
+
+        this.renderTargetSubtab("shared");
+    };
+};
+
+/* ============================================================================
+   COLONEL AI TAB
+   ============================================================================ */
+Major.renderColonel = function(p){
+
+    p.innerHTML = `
+        <div class="card">
+            <h3>Colonel Command Interface</h3>
+            <div id="colonel-terminal"></div>
+            <input type="text" id="colonel-input" placeholder="Ask the Colonel...">
+        </div>
+    `;
+
+    const input = this.shadow.querySelector("#colonel-input");
+    const term  = this.shadow.querySelector("#colonel-terminal");
+
+    // Initialize terminal
+    term.innerHTML = `<div style="color:#4ac3ff;">Colonel online. Awaiting command.</div>`;
+
+    input.addEventListener("keydown", e=>{
+        if (e.key === "Enter"){
+            const val = input.value.trim();
+            if (!val) return;
+            input.value = "";
+
+            const div = document.createElement("div");
+            div.style.color = "#fff";
+            div.textContent = "> " + val;
+            term.appendChild(div);
+
+            this.nexus.events.emit("ASK_COLONEL", { question: val });
+        }
+    });
+};
 
 /* ============================================================================
    REGISTER
-   ============================================================================
-*/
-window.__NEXUS_OFFICERS = window.__NEXUS_OFFICERS || [];
+   ============================================================================ */
+if (!window.__NEXUS_OFFICERS) window.__NEXUS_OFFICERS = [];
 window.__NEXUS_OFFICERS.push({
     name:"Major",
-    module: Major
+    module:Major
 });
 
 })();
