@@ -1,309 +1,456 @@
-// colonel.js — Maximum Military Intelligence AI
-
-////////////////////////////////////////////////////////////
-// COLONEL — MAXIMUM MILITARY INTELLIGENCE ENGINE
-// Responsibilities:
-//   - Full threat modeling
-//   - Predictive enemy activity
-//   - Chain stability analysis
-//   - Attack viability scoring
-//   - Online/offline pattern recognition
-//   - Enemy faction threat matrix
-//   - SITREP generation (full D-class package)
-//   - Rolling activity windows (for Major graph)
-//   - Integration with Sergeant shared intel
-//   - WAR NEXUS LEARNING AI OFFICER
-////////////////////////////////////////////////////////////
-
 (function(){
 "use strict";
 
+/* ============================================================
+   COLONEL — AI COMMAND & THREAT ENGINE
+   Persona: C (full AI persona).
+   Natural-language parsing enabled.
+   ============================================================ */
+
 const Colonel = {
     nexus: null,
-    mode: "HYBRID",
-    lastIntelTs: 0,
+    mode: "HYBRID",      // offensive / defensive / hybrid
+    nlMode: true,        // natural language ON
 
-    state: {
-        user: {},
-        faction: {},
-        factionMembers: {},
-        chain: {},
-        war: { wars: {} },
-        enemyFaction: [],
-        enemyMembers: {}
-    },
-
-    ai: {
-        threat: 0,
-        risk: 0,
-        aggression: 0,
-        instability: 0,
-        prediction: { nextHit: 0, drop: 0 },
-        topTargets: [],
-        summary: [],
-        mode: "HYBRID"
-    },
-
+    /* AI Memory Structure (persisted via Sergeant)
+       memory.enemy[id] = {
+           totalEstimate: number,
+           strRatio: number,
+           defRatio: number,
+           spdRatio: number,
+           dexRatio: number,
+           confidence: number  (0–1)
+           lastUpdated: timestamp,
+           attackHistory: [...]
+       }
+    */
     memory: {
         enemy: {},
-        chain: { pace: [], drops: [], timestamps: [] },
-        war: { aggression: [], retaliation: [], timestamps: [] },
+        chain: { pace: [] },
         weights: {
             offensive: { activity: 1.3, vulnerability: 0.9, window: 1.4 },
             defensive: { activity: 0.8, vulnerability: 1.3, window: 0.7 },
             hybrid:    { activity: 1.0, vulnerability: 1.0, window: 1.0 }
         },
         lastSync: 0
+    },
+
+    state: {
+        user: {},
+        faction: {},
+        factionMembers: {},
+        chain: {},
+        war: {},
+        enemyMembers: {},
+        enemyFactions: []
+    },
+
+    ai: {
+        topTargets: [],
+        summary: [],
+        threat: 0,
+        risk: 0,
+        instability: 0,
+        prediction: {},
+        mode: "HYBRID"
     }
 };
 
-/* ------------------------------------------------------------ */
-/* INIT                                                          */
-/* ------------------------------------------------------------ */
-
+/* ============================================================
+   INIT
+   ============================================================ */
 Colonel.init = function(nexus){
     this.nexus = nexus;
 
-    this.nexus.events.on("RAW_INTEL", data => this.ingestIntel(data));
-    this.nexus.events.on("SET_AI_MODE", mode => {
+    // Intel events
+    this.nexus.events.on("RAW_INTEL", d => this.ingestIntel(d));
+
+    // AI memory update from Sergeant
+    this.nexus.events.on("AI_MEMORY_UPDATE", m => { if (m) this.memory = m; });
+
+    // Manual mode toggle
+    this.nexus.events.on("SET_AI_MODE", mode => { 
         this.mode = mode;
         this.ai.mode = mode;
         this.recomputeAI();
     });
-    this.nexus.events.on("AI_MEMORY_UPDATE", mem => { if (mem) this.memory = mem; });
-    this.nexus.events.on("ASK_COLONEL", payload => this.answerAI(payload));
+
+    // NL Queries
+    this.nexus.events.on("ASK_COLONEL", q => this.answerQuery(q));
 };
 
-/* ------------------------------------------------------------ */
-/* INGEST INTEL                                                  */
-/* ------------------------------------------------------------ */
 
+/* ============================================================
+   INGEST INTEL
+   ============================================================ */
 Colonel.ingestIntel = function(d){
     if (!d || !d.user) return;
 
-    this.state.user = d.user || {};
-    this.state.faction = d.faction || {};
-    this.state.factionMembers = d.faction?.members || {};
+    try {
+        this.state.user = d.user;
+        this.state.faction = d.faction || {};
+        this.state.factionMembers = d.faction.members || {};
+        this.state.chain = d.chain || {};
+        this.state.war = d.war || {};
+        this.state.enemyFactions = d.enemyFaction || [];
 
-    // Chain safe fallback
-    this.state.chain = d.chain || {};
-    if (typeof this.state.chain.hits !== "number") this.state.chain.hits = 0;
-    if (typeof this.state.chain.timeout !== "number") this.state.chain.timeout = 0;
-
-    // ========= WAR FIX =========
-    // Always enforce war structure as { wars:{} }
-    if (d.faction?.wars && typeof d.faction.wars === "object") {
-        this.state.war = { wars: d.faction.wars };
-    } else if (d.war?.wars) {
-        this.state.war = { wars: d.war.wars };
-    } else {
-        this.state.war = { wars: {} };
-    }
-
-    // ========= ENEMY MEMBERS FIX =========
-    const enemyMembers = {};
-
-    // Prefer detailed Lieutenant "enemies" array
-    if (Array.isArray(d.enemies)){
-        for (const ef of d.enemies){
-            if (ef.members){
-                for (const id in ef.members){
-                    const m = ef.members[id];
-                    enemyMembers[id] = {
-                        id: Number(id),
-                        name: m.name || "Unknown",
-                        level: m.level || 0,
-                        status: m.status?.state || "",
-                        last_action: m.last_action?.timestamp || 0,
-                        online: m.status?.state === "Online",
-                        ...m
-                    };
-                }
-            }
+        const enemyMap = {};
+        for (const ef of d.enemyFaction){
+            const members = ef.members || {};
+            for (const mid in members) enemyMap[mid] = members[mid];
         }
-    }
-
-    // Lieutenant always provides flat fallback, use it too:
-    if (d.enemyMembersFlat){
-        for (const id in d.enemyMembersFlat){
-            enemyMembers[id] = d.enemyMembersFlat[id];
+        for (const mid in d.enemyMembersFlat){
+            enemyMap[mid] = d.enemyMembersFlat[mid];
         }
+        this.state.enemyMembers = enemyMap;
+
+        this.learn(d);
+        this.recomputeAI();
+        this.pushSitrep();
+    } catch(e){
+        this.log("ERROR ingestIntel: "+e);
     }
-
-    this.state.enemyMembers = enemyMembers;
-    this.state.enemyFaction = d.enemies || [];  // still preserve array structure
-
-    this.lastIntelTs = d.timestamp || Date.now();
-
-    this.learnFromIntel();
-    this.recomputeAI();
-    this.pushSitrep();
 };
 
-/* ------------------------------------------------------------ */
-/* LEARNING ENGINE                                               */
-/* ------------------------------------------------------------ */
 
-Colonel.learnFromIntel = function(){
+/* ============================================================
+   LEARNING ENGINE
+   ============================================================ */
+Colonel.learn = function(d){
     const now = Date.now();
-    const enemyList = Object.values(this.state.enemyMembers);
 
-    // prune >24h
-    for (const k in this.memory.enemy){
-        if (now - this.memory.enemy[k].lastSeen > 86400000){
-            delete this.memory.enemy[k];
+    // Track all enemies
+    for (const eId in this.state.enemyMembers){
+        const e = this.state.enemyMembers[eId];
+        if (!e) continue;
+
+        if (!this.memory.enemy[eId]){
+            this.memory.enemy[eId] = {
+                totalEstimate: null,
+                strRatio: null,
+                defRatio: null,
+                spdRatio: null,
+                dexRatio: null,
+                confidence: 0.25,
+                lastUpdated: now,
+                attackHistory: []
+            };
         }
+        this.memory.enemy[eId].lastUpdated = now;
     }
 
-    for (const e of enemyList){
-        const id = e.id;
-        if (!id) continue;
+    // Learn from fights
+    for (const atk of d.attacks || []){
+        if (!atk) continue;
+        const you = this.state.user.id;
+        const isYou = atk.attacker === you;
+        const opp = isYou ? atk.defender : atk.attacker;
 
-        if (!this.memory.enemy[id]){
-            this.memory.enemy[id] = { onlineTrend: [], hospTrend: [], lastSeen: 0 };
-        }
-        const mem = this.memory.enemy[id];
-        mem.lastSeen = now;
-
-        if (e.online) mem.onlineTrend.push(now);
-        if ((e.status || "").toLowerCase().includes("hospital")) mem.hospTrend.push(now);
-
-        if (mem.onlineTrend.length > 500) mem.onlineTrend.splice(0, 200);
+        if (!this.memory.enemy[opp]) continue;
+        this.learnFromFight(atk, opp);
     }
 
-    // chain memory
-    const chain = this.state.chain || {};
-    const timeLeft = chain.timeLeft ?? chain.timeout ?? 0;
+    // Chain pace
+    const hits = d.chain?.hits || 0;
+    const timeout = d.chain?.timeout || 0;
+    this.memory.chain.pace.push({ ts: now, hits, timeout });
+    if (this.memory.chain.pace.length > 500)
+        this.memory.chain.pace.splice(0, 200);
 
-    if (typeof chain.hits === "number"){
-        this.memory.chain.pace.push({ ts: now, hits: chain.hits, timeLeft });
-        if (this.memory.chain.pace.length > 400) this.memory.chain.pace.splice(0, 200);
-    }
-
-    // periodic memory sync
     if (now - this.memory.lastSync > 60000){
         this.memory.lastSync = now;
-        this.syncMemoryToFirebase();
+        this.syncMemory();
     }
 };
 
-/* ------------------------------------------------------------ */
-/* FIREBASE SYNC                                                 */
-/* ------------------------------------------------------------ */
 
-Colonel.syncMemoryToFirebase = function(){
-    if (!this.state.faction.id) return;
-    const path = `factions/${this.state.faction.id}/ai_memory`;
-    this.nexus.events.emit("AI_MEMORY_WRITE", { path, payload: this.memory });
+/* ============================================================
+   LEARN FROM FIGHT — Fair Fight Reverse Solver
+   ============================================================ */
+Colonel.learnFromFight = function(atk, enemyId){
+    const mem = this.memory.enemy[enemyId];
+    if (!mem) return;
+
+    const userStats = this.state.user.stats || {};
+    const userTotal = userStats.total || (
+        (userStats.strength||0) +
+        (userStats.speed||0) +
+        (userStats.dexterity||0) +
+        (userStats.defense||0)
+    );
+    if (!userTotal) return;
+
+    const ff = atk.modifier || atk.respect_gain || null;
+    if (!ff) return;
+
+    // Clamp
+    const F = Math.max(0.01, Math.min(ff, 0.99));
+
+    // Solve:
+    // F = 1 - (U/E)^0.366  →  E = U / (1-F)^(1/0.366)
+    const enemyTotal = userTotal / Math.pow((1 - F), (1/0.366));
+
+    if (!mem.totalEstimate){
+        mem.totalEstimate = enemyTotal;
+        mem.confidence = 0.40;
+    } else {
+        mem.totalEstimate = (mem.totalEstimate * (mem.confidence*2) + enemyTotal) /
+                            (mem.confidence*2 + 1);
+        mem.confidence = Math.min(1.0, mem.confidence + 0.04);
+    }
 };
 
-/* ------------------------------------------------------------ */
-/* AI ENGINE                                                     */
-/* ------------------------------------------------------------ */
 
+/* ============================================================
+   ESTIMATE ENEMY DISTRIBUTION — Model C: Learning
+   ============================================================ */
+Colonel.estimateDistribution = function(id){
+    const mem = this.memory.enemy[id];
+    if (!mem) return { str:0.45, def:0.20, spd:0.25, dex:0.10 };
+
+    // Prefer learned ratios
+    if (mem.strRatio && mem.defRatio && mem.spdRatio && mem.dexRatio){
+        const s = mem.strRatio + mem.defRatio + mem.spdRatio + mem.dexRatio;
+        return {
+            str: mem.strRatio/s,
+            def: mem.defRatio/s,
+            spd: mem.spdRatio/s,
+            dex: mem.dexRatio/s
+        };
+    }
+
+    // Default meta distribution
+    return { str:0.45, def:0.20, spd:0.25, dex:0.10 };
+};
+
+
+/* ============================================================
+   AI ENGINE
+   ============================================================ */
 Colonel.recomputeAI = function(){
-    const weights = this.memory.weights[this.mode.toLowerCase()] 
-        || this.memory.weights.hybrid;
+    const enemies = Object.values(this.state.enemyMembers);
+    const weights = this.memory.weights[this.mode.toLowerCase()] || this.memory.weights.hybrid;
+    const userTotal = this.state.user.stats?.total || 1;
 
-    const enemyList = Object.values(this.state.enemyMembers);
+    const scored = enemies.map(e=>{
+        const id = e.id;
+        const mem = this.memory.enemy[id];
 
-    // Threat = % online × activity weight
-    const online = enemyList.filter(e => e.online).length;
-    const threat = Math.min(1, online * 0.05 * weights.activity);
+        let estTotal = mem?.totalEstimate;
+        if (!estTotal){
+            estTotal = this.estimateBaseline(e);
+        }
 
-    const chain = this.state.chain || {};
-    const timeLeft = chain.timeLeft ?? chain.timeout ?? 0;
+        const online = e.online ? 1 : 0;
+        const vuln = userTotal / (estTotal || 1);
 
-    // risk scale
-    let risk = 0;
-    if (timeLeft < 30) risk = 0.9;
-    else if (timeLeft < 60) risk = 0.5;
-    else if (timeLeft < 120) risk = 0.2;
+        let score = 0;
+        score += online * 40;
+        score += vuln * 20 * weights.vulnerability;
+
+        if ((e.status||"").toLowerCase().includes("hospital")) score = 0;
+        if ((e.status||"").toLowerCase().includes("travel")) score *= 0.2;
+
+        return {
+            ...e,
+            estimatedTotal: Math.round(estTotal),
+            score: Math.round(score)
+        };
+    });
+
+    scored.sort((a,b)=>b.score - a.score);
+
+    const online = enemies.filter(e=>e.online).length;
+    const threat = Math.min(1, online * 0.04);
+
+    const timeLeft = this.state.chain.timeout || 0;
+    const risk = timeLeft < 30 ? 0.85 : timeLeft < 60 ? 0.5 : 0.2;
 
     const summary = [];
-    if (threat > 0.5) summary.push("HEAVY ENEMY RESISTANCE");
-    if (risk > 0.6) summary.push("CHAIN CRITICAL - STABILIZE");
-    if (chain.hits > 50) summary.push("MOMENTUM ESTABLISHED");
-    if (!summary.length) summary.push("SECTOR QUIET - AWAITING ORDERS");
-
-    const scored = this.scoreEnemies(enemyList, weights);
+    if (threat > 0.5) summary.push("High enemy activity detected.");
+    if (risk > 0.6) summary.push("Chain approaching critical window.");
+    if (!summary.length) summary.push("Situation stable.");
 
     this.ai = {
+        topTargets: scored.slice(0,10),
+        summary,
+        mode: this.mode,
         threat,
         risk,
-        aggression: chain.hits > 10 ? 0.7 : 0.2,
         instability: risk,
-        prediction: { nextHit: 0, drop: 0 },
-        topTargets: scored.slice(0, 10),
-        summary,
-        mode: this.mode
+        prediction: {}
     };
 };
 
-Colonel.scoreEnemies = function(list, weights){
-    if (!list) return [];
-    return list.map(e => {
-        let score = (e.level || 1) * weights.vulnerability;
 
-        if (e.online) score += 50;
-        if ((e.status||"").toLowerCase().includes("hospital")) score = 0;
-        if ((e.status||"").toLowerCase().includes("travel")) score *= 0.1;
-
-        return { ...e, score: Math.round(score) };
-    }).sort((a,b) => b.score - a.score);
+/* ============================================================
+   BASELINE STAT ESTIMATION
+   ============================================================ */
+Colonel.estimateBaseline = function(e){
+    // Balanced baseline (Option 2)
+    const lvl = e.level || 1;
+    const K = 1800;
+    return (lvl * lvl) * K;
 };
 
-/* ------------------------------------------------------------ */
-/* SITREP                                                        */
-/* ------------------------------------------------------------ */
 
+/* ============================================================
+   SITREP
+   ============================================================ */
 Colonel.pushSitrep = function(){
     this.nexus.events.emit("SITREP_UPDATE", {
         user: this.state.user,
         faction: this.state.faction,
         factionMembers: Object.values(this.state.factionMembers),
         chain: this.state.chain,
-        war: this.state.war,              // FIXED: consistent { wars:{} }
-        enemyFaction: this.state.enemyFaction,
+        war: this.state.war,
+        enemyFaction: this.state.enemyFactions,
         enemyMembers: Object.values(this.state.enemyMembers),
         ai: this.ai
     });
 };
 
-/* ------------------------------------------------------------ */
-/* AI TERMINAL RESPONSES                                         */
-/* ------------------------------------------------------------ */
 
-Colonel.answerAI = function(payload){
-    const q = (payload.question || "").toLowerCase();
-    let answer = "UNKNOWN COMMAND. TYPE 'HELP'.";
-
-    if (q.includes("status")){
-        answer = `SYSTEMS ONLINE. MODE: ${this.mode}. THREAT: ${(this.ai.threat*100).toFixed(0)}%.`;
-    }
-    else if (q.includes("target")){
-        const top = this.ai.topTargets[0];
-        answer = top ? `PRIMARY TARGET: ${top.name} [Lv${top.level}]`
-                     : "NO VIABLE TARGETS.";
-    }
-    else if (q.includes("war")){
-        const warCount = Object.keys(this.state.war?.wars || {}).length;
-        answer = warCount > 0 ? `${warCount} CONFLICTS DETECTED.` : "NO ACTIVE CONFLICTS.";
-    }
-    else if (q.includes("chain")){
-        answer = `LINK STATUS: ${this.state.chain.hits || 0} HITS. TIMEOUT: ${this.state.chain.timeout || 0}s.`;
-    }
-    else if (q.includes("help")){
-        answer = "COMMANDS: STATUS, TARGET, WAR, CHAIN, REPORT";
-    }
-    else if (q.includes("report")){
-        answer = this.ai.summary.join(" ") || "NOTHING TO REPORT.";
-    }
-
-    this.nexus.events.emit("ASK_COLONEL_RESPONSE", { answer });
+/* ============================================================
+   MEMORY SYNC
+   ============================================================ */
+Colonel.syncMemory = function(){
+    if (!this.state.faction?.id) return;
+    this.nexus.events.emit("AI_MEMORY_WRITE", {
+        path:`factions/${this.state.faction.id}/ai_memory`,
+        payload:this.memory
+    });
 };
 
+
+/* ============================================================
+   NATURAL LANGUAGE ENGINE
+   ============================================================ */
+Colonel.answerQuery = function(payload){
+    const q = (payload.question || "").trim();
+    if (!q){ 
+        this.respond("I didn’t catch that. What do you need?");
+        return;
+    }
+
+    const lower = q.toLowerCase();
+    const words = lower.split(/\s+/);
+
+    // Quick pattern routing
+    if (lower.includes("who") && lower.includes("attack")){
+        return this.respondTargetSuggestion();
+    }
+    if (lower.includes("strong") && lower.includes("enemy")){
+        return this.respondStrongestEnemy();
+    }
+    if (lower.includes("weak") && lower.includes("enemy")){
+        return this.respondWeakEnemies();
+    }
+    if (lower.includes("threat")){
+        return this.respondThreat();
+    }
+    if (lower.includes("chain") && lower.includes("status")){
+        return this.respondChainStatus();
+    }
+    if (lower.includes("war") && (lower.includes("status") || lower.includes("situation"))){
+        return this.respondWarStatus();
+    }
+    if (lower.includes("expand")){
+        return this.respondExpanded();
+    }
+    if (lower.includes("help")){
+        return this.respondHelp();
+    }
+    if (lower.startsWith("target ")){
+        const n = q.substring(7).trim();
+        return this.respondTargetSpecific(n);
+    }
+
+    // Fallback
+    return this.respond("I’m here. Clarify your request.");
+};
+
+
+/* ============================================================
+   RESPONSES (short-by-default, expandable)
+   ============================================================ */
+Colonel.respond = function(text){
+    this.nexus.events.emit("ASK_COLONEL_RESPONSE", { answer: text });
+};
+Colonel.respondHelp = function(){
+    this.respond("Commands: who should I attack | chain status | war status | enemy threats | expand");
+};
+
+Colonel.respondExpanded = function(){
+    const t = this.ai.topTargets;
+    if (!t.length) return this.respond("No enemy intel available.");
+
+    let str = "Extended Target Analysis:<br>";
+    for (const e of t){
+        str += `• ${e.name} (Lv ${e.level}) – Est ~${e.estimatedTotal} total stats<br>`;
+    }
+    this.respond(str);
+};
+
+Colonel.respondTargetSuggestion = function(){
+    const t = this.ai.topTargets[0];
+    if (!t) return this.respond("No viable targets detected.");
+    this.respond(`Recommend engaging ${t.name}. Risk minimal.`);
+};
+
+Colonel.respondStrongestEnemy = function(){
+    const arr = Object.values(this.state.enemyMembers);
+    if (!arr.length) return this.respond("No enemies detected.");
+
+    arr.sort((a,b)=>b.level - a.level);
+    const top = arr[0];
+    this.respond(`${top.name} appears strongest by level profile.`);
+};
+
+Colonel.respondWeakEnemies = function(){
+    const arr = this.ai.topTargets.slice(-3);
+    if (!arr.length) return this.respond("No weak targets detected.");
+    const names = arr.map(e=>e.name).join(", ");
+    this.respond(`Potential weak targets: ${names}`);
+};
+
+Colonel.respondThreat = function(){
+    const t = Math.round(this.ai.threat*100);
+    this.respond(`Enemy activity at ${t}%.`);
+};
+
+Colonel.respondChainStatus = function(){
+    const c = this.state.chain;
+    this.respond(`Chain at ${c.hits} hits. Timeout ${c.timeout}s.`);
+};
+
+Colonel.respondWarStatus = function(){
+    const w = this.state.war;
+    if (!w || !Object.keys(w).length) return this.respond("No active war.");
+    this.respond("War active. Multiple conflicts detected.");
+};
+
+Colonel.respondTargetSpecific = function(name){
+    name = name.toLowerCase();
+    const e = Object.values(this.state.enemyMembers)
+        .find(x => x.name.toLowerCase().includes(name));
+    if (!e) return this.respond("No match found.");
+    this.respond(`${e.name}: Level ${e.level}, status ${e.status}.`);
+};
+
+
+/* ============================================================
+   LOG
+   ============================================================ */
+Colonel.log = function(x){ 
+    this.nexus.log("[COLONEL] "+x);
+};
+
+
+/* ============================================================
+   REGISTER MODULE
+   ============================================================ */
 window.__NEXUS_OFFICERS = window.__NEXUS_OFFICERS || [];
-window.__NEXUS_OFFICERS.push({ name: "Colonel", module: Colonel });
+window.__NEXUS_OFFICERS.push({ name:"Colonel", module:Colonel });
 
 })();
