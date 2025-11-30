@@ -11,19 +11,23 @@
 //   • ZERO placeholders. ZERO stubs. FULL production build.
 // ===============================================================
 
+// ===============================================================
+//  WAR NEXUS INTEL ENGINE — LIEUTENANT (PURE V2 FINAL BUILD)
+// ===============================================================
+
 export class Lieutenant {
     constructor(apiKey, logFn = console.log) {
         this.apiKey = apiKey;
         this.log = logFn;
 
         this.intel = {
+            timestamp: 0,
             user: null,
             faction: null,
-            enemies: {},
-            enemyFactions: {},
-            wars: null,
             chain: null,
-            timestamp: 0
+            wars: null,
+            enemies: {},
+            enemyFactions: {}
         };
 
         this.polling = false;
@@ -33,7 +37,7 @@ export class Lieutenant {
     }
 
     // ===========================================================
-    //   CONTROL
+    //  CONTROL
     // ===========================================================
 
     start() {
@@ -62,63 +66,82 @@ export class Lieutenant {
     }
 
     // ===========================================================
-    //   API WRAPPER
+    //  API WRAPPER
     // ===========================================================
 
     async call(endpoint) {
-        const url = `https://api.torn.com${endpoint}` +
-                    (endpoint.includes("?") ? `&key=${this.apiKey}` : `?key=${this.apiKey}`);
+        const url =
+            `https://api.torn.com${endpoint}` +
+            (endpoint.includes("?") ? `&key=${this.apiKey}` : `?key=${this.apiKey}`);
 
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status} on ${endpoint}`);
-        const json = await res.json();
-        if (json.error) throw new Error(`Torn API Error ${json.error.code}: ${json.error.error}`);
+        let res;
+        try {
+            res = await fetch(url);
+        } catch (err) {
+            throw new Error(`Network error calling ${url}: ${err}`);
+        }
+
+        if (!res.ok) {
+            throw new Error(`HTTP ${res.status} calling ${url}`);
+        }
+
+        let json;
+        try {
+            json = await res.json();
+        } catch {
+            throw new Error(`Invalid JSON returned from ${url}`);
+        }
+
+        if (json.error) {
+            throw new Error(`API Error ${json.error.code}: ${json.error.error}`);
+        }
+
         return json;
     }
 
     // ===========================================================
-    //   MASTER INTEL GATHER
+    //  MASTER INTEL BUILD
     // ===========================================================
 
     async pullAllIntel() {
         const now = Date.now();
 
-        // -------------------------------
+        // -------------------------------------------------------
         // USER BASIC
-        // -------------------------------
+        // -------------------------------------------------------
         const ub = await this.call("/v2/user/basic");
         const profile = ub.profile;
-        if (!profile) throw new Error("Missing user.profile from v2/user/basic");
+        if (!profile) throw new Error("Missing profile in v2/user/basic.");
 
-        const userId = profile.id;
-
-        // -------------------------------
+        // -------------------------------------------------------
         // USER FACTION
-        // -------------------------------
+        // -------------------------------------------------------
         const ufWrap = await this.call("/v2/user/faction");
         const uf = ufWrap.faction || null;
-        const factionId = uf ? uf.id : null;
+        const factionId = uf?.id || null;
         this.lastFactionId = factionId;
 
-        // -------------------------------
-        // BARS (CHAIN HERE)
-        // -------------------------------
+        // -------------------------------------------------------
+        // BARS (ENERGY, NERVE, HAPPY, LIFE, CHAIN)
+        // -------------------------------------------------------
         const barsWrap = await this.call("/v2/user/bars");
         const bars = barsWrap.bars || {};
-        const chain = bars.chain || { id: 0, current: 0, max: 10, timeout: 0, modifier: 1 };
+        const chain = bars.chain || {};
 
-        // -------------------------------
-        // PERSONAL STATS
-        // -------------------------------
+        // -------------------------------------------------------
+        // PERSONALSTATS (v1 — NOT /v2/)
+        // -------------------------------------------------------
         let personalStats = {};
         try {
-            const ps = await this.call("/v2/user?selections=personalstats");
+            const ps = await this.call("/user?selections=personalstats");
             personalStats = ps.personalstats || {};
-        } catch { personalStats = {}; }
+        } catch {
+            personalStats = {};
+        }
 
-        // -------------------------------
-        // BATTLE STATS
-        // -------------------------------
+        // -------------------------------------------------------
+        // BATTLESTATS
+        // -------------------------------------------------------
         let battleStats = {};
         try {
             const bs = await this.call("/v2/user/battlestats");
@@ -129,61 +152,83 @@ export class Lieutenant {
                 defense: bs.defense || 0,
                 total: bs.total || 0
             };
-        } catch { battleStats = {}; }
+        } catch {
+            battleStats = {};
+        }
 
         // =======================================================
-        // FACTION DATA
+        //  FACTION DATA
         // =======================================================
         let factionBasic = null;
         let factionMembers = [];
         let factionWars = { ranked: null, raids: [], territory: [] };
 
         if (factionId) {
-            const fbWrap = await this.call(`/v2/faction/${factionId}/basic`);
-            factionBasic = fbWrap.basic || null;
+            const fb = await this.call(`/v2/faction/${factionId}/basic`);
+            factionBasic = fb.basic || null;
 
-            const fmWrap = await this.call(`/v2/faction/${factionId}/members`);
-            factionMembers = fmWrap.members || [];
+            const fm = await this.call(`/v2/faction/${factionId}/members`);
+            factionMembers = fm.members || [];
 
             const fw = await this.call(`/v2/faction/${factionId}/wars`);
             factionWars = fw.wars || factionWars;
         }
 
         // =======================================================
-        // ENEMY FACTIONS FROM WARS
+        //  ENEMY FACTIONS
         // =======================================================
         const enemyIndex = await this._generateEnemyIndex(factionWars);
 
         // =======================================================
-        // NORMALIZE EVERYTHING
+        //  NORMALIZE EVERYTHING
         // =======================================================
+
         this.intel = {
             timestamp: now,
             user: this._normUser(profile, personalStats, battleStats, bars),
             faction: this._normFaction(factionBasic, factionMembers),
-            enemies: enemyIndex.enemies,
-            enemyFactions: enemyIndex.factions,
+            chain: this._normChain(chain),
             wars: factionWars,
-            chain: this._normChain(chain)
+            enemies: enemyIndex.enemies,
+            enemyFactions: enemyIndex.factions
         };
+
+        // Dynamic polling:
+        if (this.intel.chain.active) this.pollInterval = 5000;
+        else if (factionWars?.ranked || factionWars?.raids?.length) this.pollInterval = 8000;
+        else this.pollInterval = 15000;
     }
 
     // ===========================================================
-    //   NORMALIZATION FUNCTIONS
+    //  NORMALIZATION LAYERS
     // ===========================================================
 
-    _normUser(profile, personal, battle, bars) {
+    _normUser(p, personal, battle, bars) {
+        const action = p.last_action || {};
+
         return {
-            id: profile.id,
-            name: profile.name,
-            level: profile.level,
-            gender: profile.gender,
+            id: Number(p.id),
+            name: p.name,
+            level: p.level,
+            gender: p.gender || "",
+            travel: p.travel || null,
             status: {
-                state: profile.status?.state || "Unknown",
-                description: profile.status?.description || "Unknown",
-                color: profile.status?.color || ""
+                state: p.status?.state || "Unknown",
+                description: p.status?.description || "Unknown",
+                color: p.status?.color || ""
             },
-            bars: bars,
+            last_action: {
+                status: action.status || "Unknown",
+                timestamp: action.timestamp || 0,
+                relative: action.relative || ""
+            },
+            bars: {
+                energy: bars.energy || {},
+                nerve: bars.nerve || {},
+                happy: bars.happy || {},
+                life: bars.life || {},
+                chain: bars.chain || {}
+            },
             personalstats: personal,
             battlestats: battle
         };
@@ -193,6 +238,7 @@ export class Lieutenant {
         if (!basic) return null;
 
         const roster = {};
+
         for (const m of members) {
             roster[m.id] = {
                 id: m.id,
@@ -202,16 +248,17 @@ export class Lieutenant {
                 position: m.position || "Member",
                 last_action: {
                     status: m.last_action?.status || "Unknown",
-                    relative: m.last_action?.relative || "Unknown",
-                    timestamp: m.last_action?.timestamp || 0
+                    timestamp: m.last_action?.timestamp || 0,
+                    relative: m.last_action?.relative || ""
                 },
                 status: {
                     state: m.status?.state || "Unknown",
-                    description: m.status?.description || "Unknown",
+                    description: m.status?.description || "",
                     color: m.status?.color || ""
                 },
                 is_in_oc: m.is_in_oc || false,
-                is_on_wall: m.is_on_wall || false
+                is_on_wall: m.is_on_wall || false,
+                revive_setting: m.revive_setting || "Unknown"
             };
         }
 
@@ -219,28 +266,39 @@ export class Lieutenant {
             id: basic.id,
             name: basic.name,
             tag: basic.tag || "",
+            tag_image: basic.tag_image || "",
             leader_id: basic.leader_id,
             co_leader_id: basic.co_leader_id,
             respect: basic.respect,
+            members: basic.members,
             capacity: basic.capacity,
             best_chain: basic.best_chain,
             rank: basic.rank,
-            roster: roster
+            roster
         };
     }
 
     _normChain(chain) {
+        const current = chain.current || 0;
+        const max = chain.max || 10;
+
         return {
             id: chain.id || 0,
-            hits: chain.current || 0,
-            max: chain.max || 10,
+            hits: current,
+            max: max,
             timeout: chain.timeout || 0,
-            modifier: chain.modifier || 1
+            cooldown: chain.cooldown || 0,
+            start: chain.start || 0,
+            end: chain.end || 0,
+            modifier: chain.modifier || 1,
+
+            active: current > 0,
+            percent: max > 0 ? (current / max) : 0
         };
     }
 
     // ===========================================================
-    //   ENEMY INDEX BUILDER
+    //  ENEMY GENERATION
     // ===========================================================
 
     async _generateEnemyIndex(wars) {
@@ -249,20 +307,34 @@ export class Lieutenant {
             enemies: {}
         };
 
-        if (!wars || !wars.raids) return out;
+        if (!wars) return out;
 
         const ids = new Set();
-        for (const r of wars.raids) {
-            const atk = r.attackers?.faction_id;
-            const def = r.defenders?.faction_id;
-            if (atk) ids.add(atk);
-            if (def) ids.add(def);
+
+        // RANKED WAR
+        if (wars.ranked?.opponent) {
+            ids.add(wars.ranked.opponent);
         }
 
+        // RAIDS
+        for (const r of wars.raids || []) {
+            if (r.attackers?.faction_id) ids.add(r.attackers.faction_id);
+            if (r.defenders?.faction_id) ids.add(r.defenders.faction_id);
+        }
+
+        // TERRITORY WARS
+        for (const t of wars.territory || []) {
+            if (t.enemy_faction) ids.add(t.enemy_faction);
+        }
+
+        // FETCH EACH ENEMY FACTION
         for (const fId of ids) {
             try {
-                const wrap = await this.call(`/v2/faction/${fId}/members`);
-                const members = wrap.members || [];
+                const basicWrap = await this.call(`/v2/faction/${fId}/basic`);
+                const basic = basicWrap.basic || null;
+
+                const memWrap = await this.call(`/v2/faction/${fId}/members`);
+                const members = memWrap.members || [];
 
                 const roster = {};
                 for (const m of members) {
@@ -270,24 +342,22 @@ export class Lieutenant {
                         id: m.id,
                         name: m.name,
                         level: m.level,
-                        status: {
-                            state: m.status?.state || "Unknown",
-                            description: m.status?.description || "Unknown",
-                            color: m.status?.color || ""
-                        },
-                        last_action: m.last_action || {}
+                        last_action: m.last_action || {},
+                        status: m.status || {}
                     };
-
                     out.enemies[m.id] = roster[m.id];
                 }
 
                 out.factions[fId] = {
                     id: fId,
+                    name: basic?.name || "",
+                    tag: basic?.tag || "",
+                    basic,
                     roster
                 };
 
             } catch (err) {
-                this.log("[Lieutenant] Enemy faction error:", err);
+                this.log("[Lieutenant] Failed enemy faction:", fId, err);
             }
         }
 
@@ -295,7 +365,7 @@ export class Lieutenant {
     }
 
     // ===========================================================
-    //   PUBLIC ACCESSOR
+    //  PUBLIC ACCESSOR
     // ===========================================================
 
     getIntel() {
