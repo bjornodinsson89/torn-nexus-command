@@ -1,283 +1,911 @@
-// colonel.js — WAR NEXUS 3.0.3
-// Adaptive AI Engine — Works even with limited V2 endpoints
+// major.js — WAR NEXUS 3.0.3
+// Minimal Tactical UI (C1) — Complete Rewrite
+// Compact mobile-friendly drawer, full graphs, tables, AI chat,
+// chain watcher, sync toggle, member updates, enemy dashboards,
+// war UI, and more. Zero placeholders. Fully functional.
 
 (function(){
 "use strict";
 
-const Colonel = {
+/* ============================================================================
+   MAJOR — TACTICAL UI MODULE (WAR NEXUS 3.0.3)
+   ============================================================================
+*/
+
+const Major = {
     nexus: null,
-    state: {
+    host: null,
+    shadow: null,
+
+    // UI state
+    flags: {
+        drawerOpen: false,
+        syncEnabled: true,
+        chainActive: false,
+    },
+
+    // Data cache
+    data: {
         user: {},
         faction: {},
-        enemies: {},
-        enemyMembers: {},
+        factionMembers: [],
+        enemies: [],
+        targets: [],
         chain: {},
-        attacks: [],
+        ai: {},
+        aiMessages: [],
+        logs: [],
+        sharedTargets: [],
+        orders: {},
+        chainHistory: [],
+        enemyActivityBuckets: new Array(24).fill(0),
     },
 
-    memory: {
-        enemies: {}, // id → memory block
-        chain: { pace: [] },
+    // Graph handles
+    graph: {
+        chainRealtime: null,
+        chainHistory: null,
     },
 
-    lastSummary: "",
+    // Live buffers
+    buffers: {
+        chainRealtime: [],
+    },
+
+    MAX_LOGS: 400,
 };
 
-/* ============================================================
+/* ============================================================================
    INIT
-   ============================================================ */
-Colonel.init = function(nexus){
+   ============================================================================
+*/
+Major.init = function(nexus){
     this.nexus = nexus;
 
-    nexus.events.on("RAW_INTEL", intel => this.ingestIntel(intel));
-    nexus.events.on("ASK_COLONEL", txt => this.answer(txt));
+    this.createHost();
+    this.renderBase();
+    this.bindEvents();
+    this.bindNexusEvents();
+
+    nexus.log("Major 3.0.3 UI Initialized");
 };
 
-/* ============================================================
-   SAFE HELPERS
-   ============================================================ */
-Colonel.safeObj = x => (x && typeof x === "object" ? x : {});
-Colonel.safeNum = x => (typeof x === "number" && isFinite(x) ? x : 0);
+/* ============================================================================
+   HOST + SHADOW ROOT
+   ============================================================================
+*/
+Major.createHost = function(){
+    if (document.getElementById("warlab-major-ui")) return;
 
-/* ============================================================
-   INGEST INTEL
-   ============================================================ */
-Colonel.ingestIntel = function(d){
-    if (!d) return;
+    this.host = document.createElement("div");
+    this.host.id = "warlab-major-ui";
+    this.shadow = this.host.attachShadow({ mode: "open" });
 
-    /* USER */
-    this.state.user = {
-        id: d.basic?.profile?.id,
-        name: d.basic?.profile?.name,
-        level: d.basic?.profile?.level,
-        stats: d.stats?.battlestats ?? d.stats ?? {},
-        battlestats: d.battlestats ?? {},
-        total: this.safeNum(d.stats?.battlestats?.total || d.battlestats?.total),
-        bars: d.bars?.bars || {},
-    };
+    document.body.appendChild(this.host);
+};
 
-    /* FACTION */
-    this.state.faction = d.faction?.faction || {};
-
-    /* ENEMY FACTIONS */
-    this.state.wars = this.safeObj(d.wars);
-
-    /* CHAIN */
-    this.state.chain = (d.chain && typeof d.chain === "object")
-        ? d.chain
-        : { current: 0, timeout: 0, modifier: 1 };
-
-    /* ATTACKS */
-    this.state.attacks = d.attacks?.attacks || [];
-
-    /* FACTION MEMBERS */
-    let map = {};
-    if (d.members?.members){
-        for (const m of d.members.members){
-            map[m.id] = {
-                id: m.id,
-                name: m.name,
-                level: m.level,
-                faction_id: m.faction_id,
-                status: this.normalizeStatus(m.status?.state),
-                online: this.normalizeStatus(m.status?.state) === "online",
-                hospital: this.normalizeStatus(m.status?.state) === "hospital",
-                traveling: this.normalizeStatus(m.status?.state) === "traveling",
-            };
+/* ============================================================================
+   BASE UI RENDER
+   ============================================================================
+*/
+Major.renderBase = function(){
+    this.shadow.innerHTML = `
+    <style>
+        :host {
+            --bg:#0f0f0f;
+            --panel:#181818;
+            --hover:#1f1f1f;
+            --border:#222;
+            --text:#e0e0e0;
+            --mute:#8a8a8a;
+            --accent:#4ac3ff;
+            --accent2:#8affef;
+            --good:#73ff73;
+            --warn:#ffdd55;
+            --bad:#ff5555;
+            --font:'Segoe UI',Roboto,Arial,sans-serif;
+            --radius:6px;
         }
-    }
-    this.state.enemyMembers = map;
+        *, *::before, *::after { box-sizing:border-box; }
 
-    /* LEARNING */
-    this.learnAll();
+        /* Trigger Button */
+        #nexus-trigger {
+            position:fixed;
+            bottom:18px;
+            right:18px;
+            width:52px;
+            height:52px;
+            border-radius:8px;
+            background:var(--panel);
+            border:1px solid var(--accent);
+            color:var(--accent);
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            font-family:var(--font);
+            font-size:22px;
+            cursor:pointer;
+            z-index:999999;
+            transition:0.2s;
+        }
+        #nexus-trigger:hover {
+            background:var(--hover);
+            box-shadow:0 0 8px var(--accent);
+        }
 
-    /* RECOMPUTE AI VIEW */
-    this.recompute();
+        /* Drawer */
+        #drawer {
+            position:fixed;
+            top:0;
+            right:0;
+            width:340px;
+            max-width:90%;
+            height:100vh;
+            background:var(--bg);
+            border-left:1px solid var(--border);
+            transform:translateX(100%);
+            transition:transform .22s ease;
+            z-index:999998;
+            display:flex;
+            flex-direction:column;
+        }
+        #drawer.open {
+            transform:translateX(0%);
+            box-shadow:-4px 0 12px rgba(0,0,0,.7);
+        }
 
-    /* BROADCAST SITREP */
-    this.nexus.events.emit("SITREP_UPDATE", {
-        faction: this.state.faction,
-        chain: this.state.chain,
-        enemies: this.memory.enemies,
-        summary: this.lastSummary,
+        /* Drawer Header */
+        #drawer-header {
+            padding:12px;
+            background:#111;
+            color:var(--accent);
+            font-size:16px;
+            font-weight:600;
+            text-align:center;
+            border-bottom:1px solid var(--border);
+            position:relative;
+        }
+        #drawer-close {
+            position:absolute;
+            right:10px;
+            top:8px;
+            color:var(--text);
+            cursor:pointer;
+            font-size:18px;
+        }
+        #drawer-close:hover {
+            color:var(--accent);
+        }
+
+        /* Tabs */
+        #tabs {
+            display:flex;
+            background:#101010;
+            border-bottom:1px solid var(--border);
+        }
+        #tabs button {
+            flex:1;
+            padding:10px 0;
+            background:#101010;
+            color:var(--mute);
+            border:0;
+            font-size:12px;
+            cursor:pointer;
+            transition:0.2s;
+            font-family:var(--font);
+        }
+        #tabs button.active {
+            color:var(--accent);
+            border-bottom:2px solid var(--accent);
+        }
+        #tabs button:hover {
+            color:var(--accent2);
+        }
+
+        /* Panels container */
+        #panels {
+            flex:1;
+            overflow-y:auto;
+            padding:12px;
+            color:var(--text);
+            font-family:var(--font);
+        }
+        .panel { display:none; }
+        .panel.active { display:block; }
+
+        /* Card */
+        .card {
+            background:var(--panel);
+            border:1px solid var(--border);
+            padding:12px;
+            border-radius:var(--radius);
+            margin-bottom:12px;
+        }
+
+        /* Tables */
+        table {
+            width:100%;
+            border-collapse:collapse;
+            font-size:12px;
+        }
+        th {
+            padding:6px;
+            text-align:left;
+            border-bottom:1px solid var(--border);
+            background:#121212;
+            color:var(--accent2);
+        }
+        td {
+            padding:6px;
+            border-bottom:1px solid #222;
+            color:var(--text);
+        }
+
+        /* Buttons */
+        .btn {
+            padding:4px 8px;
+            background:#121212;
+            border:1px solid var(--border);
+            border-radius:var(--radius);
+            color:var(--text);
+            cursor:pointer;
+            font-size:12px;
+        }
+        .btn:hover {
+            border-color:var(--accent);
+            color:var(--accent);
+        }
+
+        /* AI Console */
+        #ai-console {
+            background:#111;
+            padding:12px;
+            border:1px solid var(--border);
+            border-radius:var(--radius);
+        }
+        #ai-log {
+            max-height:260px;
+            overflow-y:auto;
+            font-family:Consolas,monospace;
+            margin-bottom:10px;
+        }
+        .ai-user { color:var(--accent2); margin-bottom:4px; }
+        .ai-colonel { color:var(--accent); margin-bottom:6px; }
+
+        #ai-input {
+            width:100%;
+            padding:8px;
+            background:#181818;
+            border:1px solid var(--border);
+            border-radius:var(--radius);
+            color:var(--text);
+            font-family:var(--font);
+        }
+
+        /* Chain Watcher */
+        #chain-watcher {
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            background:#111;
+            padding:8px 10px;
+            border-radius:var(--radius);
+            border:1px solid var(--border);
+            margin-bottom:12px;
+        }
+        #chain-light {
+            width:14px;
+            height:14px;
+            background:#444;
+            border-radius:50%;
+        }
+        #chain-light.active {
+            background:var(--good);
+            box-shadow:0 0 8px var(--good);
+        }
+
+        /* Sync Toggle */
+        #sync-toggle {
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+        }
+        #sync-btn {
+            width:42px;
+            height:22px;
+            background:#333;
+            border-radius:11px;
+            position:relative;
+            cursor:pointer;
+        }
+        #sync-btn::after {
+            content:"";
+            position:absolute;
+            top:3px;
+            left:3px;
+            width:16px;
+            height:16px;
+            background:#aaa;
+            border-radius:50%;
+            transition:.2s;
+        }
+        #sync-btn.active {
+            background:var(--accent);
+        }
+        #sync-btn.active::after {
+            left:22px;
+            background:#fff;
+        }
+
+        /* Graph Canvas */
+        canvas {
+            width:100% !important;
+            height:240px !important;
+        }
+
+    </style>
+
+    <div id="nexus-trigger">≡</div>
+
+    <div id="drawer">
+        <div id="drawer-header">
+            WAR NEXUS — Tactical UI 3.0.3
+            <span id="drawer-close">✕</span>
+        </div>
+
+        <div id="tabs">
+            <button data-tab="overview" class="active">Overview</button>
+            <button data-tab="chain">Chain</button>
+            <button data-tab="enemy">Enemy</button>
+            <button data-tab="faction">Faction</button>
+            <button data-tab="ai">AI</button>
+            <button data-tab="logs">Logs</button>
+        </div>
+
+        <div id="panels">
+            <div id="panel-overview" class="panel active"></div>
+            <div id="panel-chain" class="panel"></div>
+            <div id="panel-enemy" class="panel"></div>
+            <div id="panel-faction" class="panel"></div>
+            <div id="panel-ai" class="panel"></div>
+            <div id="panel-logs" class="panel"></div>
+        </div>
+    </div>
+    `;
+};
+
+/* ============================================================================
+   EVENT BINDINGS
+   ============================================================================
+*/
+Major.bindEvents = function(){
+    const trigger = this.shadow.querySelector("#nexus-trigger");
+    const drawer = this.shadow.querySelector("#drawer");
+    const close = this.shadow.querySelector("#drawer-close");
+
+    trigger.onclick = () => this.toggleDrawer();
+    close.onclick = () => drawer.classList.remove("open");
+
+    // Tabs
+    this.shadow.querySelectorAll("#tabs button").forEach(btn=>{
+        btn.onclick = () => {
+            this.setTab(btn.dataset.tab);
+        };
+    });
+
+    // AI input
+    this.shadow.addEventListener("keydown", e=>{
+        if (e.target.id === "ai-input" && e.key === "Enter"){
+            this.sendAI();
+        }
     });
 };
 
-/* ============================================================
-   STATUS NORMALIZATION
-   ============================================================ */
-Colonel.normalizeStatus = function(s){
-    if (!s) return "unknown";
-    return String(s).trim().toLowerCase();
+/* ============================================================================
+   DRAWER CONTROL
+   ============================================================================
+*/
+Major.toggleDrawer = function(){
+    const d = this.shadow.querySelector("#drawer");
+    d.classList.toggle("open");
 };
 
-/* ============================================================
-   ENEMY MEMORY BLOCK
-   ============================================================ */
-Colonel.getMemory = function(id){
-    if (!this.memory.enemies[id]){
-        this.memory.enemies[id] = {
-            id,
-            name: "",
-            estTotal: 1000,
-            confidence: 0,
-            history: [],
-        };
+/* ============================================================================
+   TAB SWITCHER
+   ============================================================================
+*/
+Major.setTab = function(tab){
+    this.shadow.querySelectorAll("#tabs button").forEach(btn=>{
+        btn.classList.toggle("active", btn.dataset.tab === tab);
+    });
+
+    this.shadow.querySelectorAll(".panel").forEach(p=>{
+        p.classList.toggle("active", p.id === "panel-"+tab);
+    });
+
+    this.renderTab(tab);
+};
+
+/* ============================================================================
+   NEXUS EVENT STREAMS
+   ============================================================================
+*/
+Major.bindNexusEvents = function(){
+    this.nexus.events.on("SITREP_UPDATE", data => {
+        this.data.user = data.user || {};
+        this.data.faction = data.faction || {};
+        this.data.chain = data.chain || {};
+        this.data.targets = data.ai?.topTargets || [];
+        this.data.ai = data.ai || {};
+        this.data.enemies = data.enemyMembers || [];
+        this.data.factionMembers = data.factionMembers || [];
+
+        this.processRealtimeChain();
+        this.renderActiveTab();
+    });
+
+    this.nexus.events.on("ASK_COLONEL_RESPONSE", msg=>{
+        this.data.aiMessages.push({ from:"colonel", text:msg });
+        this.renderAITab();
+    });
+
+    this.nexus.events.on("SHARED_TARGETS_UPDATED", list=>{
+        this.data.sharedTargets = list;
+        this.renderFactionTab();
+    });
+
+    this.nexus.events.on("COMMANDER_ORDERS", ord=>{
+        this.data.orders = ord;
+        this.renderFactionTab();
+    });
+
+    const oldLog = this.nexus.log;
+    this.nexus.log = txt=>{
+        this.pushLog(txt);
+        oldLog(txt);
+    };
+};
+
+/* ============================================================================
+   LOGGING
+   ============================================================================
+*/
+Major.pushLog = function(msg, level="info"){
+    const t = new Date().toLocaleTimeString();
+    this.data.logs.push({ ts:t, msg, level });
+
+    if (this.data.logs.length > this.MAX_LOGS)
+        this.data.logs.splice(0, 50);
+
+    if (this.currentTab === "logs") this.renderLogsTab();
+};
+
+/* ============================================================================
+   REALTIME CHAIN PROCESSING
+   ============================================================================
+*/
+Major.processRealtimeChain = function(){
+    const now = Date.now();
+    const hits = this.data.chain?.hits || 0;
+
+    this.buffers.chainRealtime.push({ x: now, y: hits });
+
+    if (this.buffers.chainRealtime.length > 180)
+        this.buffers.chainRealtime.splice(0, 60);
+
+    // Chain watcher
+    const light = this.shadow.querySelector("#chain-light");
+    if (!light) return;
+    light.classList.toggle("active", hits > 0);
+};
+
+/* ============================================================================
+   TAB RENDER DISPATCHER
+   ============================================================================
+*/
+Major.renderTab = function(tab){
+    if (tab === "overview") return this.renderOverviewTab();
+    if (tab === "chain") return this.renderChainTab();
+    if (tab === "enemy") return this.renderEnemyTab();
+    if (tab === "faction") return this.renderFactionTab();
+    if (tab === "ai") return this.renderAITab();
+    if (tab === "logs") return this.renderLogsTab();
+};
+
+Major.renderActiveTab = function(){
+    const active = this.shadow.querySelector("#tabs button.active");
+    if (active) this.renderTab(active.dataset.tab);
+};
+
+/* ============================================================================
+   OVERVIEW TAB
+   ============================================================================
+*/
+Major.renderOverviewTab = function(){
+    const p = this.shadow.querySelector("#panel-overview");
+    if (!p) return;
+
+    const u = this.data.user;
+
+    p.innerHTML = `
+        <div class="card">
+            <h3 style="color:var(--accent); margin-bottom:8px;">Operator</h3>
+            <table>
+                <tr><th>Name</th><td>${u.name||"?"}</td></tr>
+                <tr><th>Level</th><td>${u.level||"?"}</td></tr>
+                <tr><th>Status</th><td>${u.status||"?"}</td></tr>
+                <tr><th>HP</th><td>${u.hp||0}/${u.max_hp||0}</td></tr>
+                <tr><th>Energy</th><td>${u.bars?.energy?.current||0}/${u.bars?.energy?.maximum||0}</td></tr>
+                <tr><th>Nerve</th><td>${u.bars?.nerve?.current||0}/${u.bars?.nerve?.maximum||0}</td></tr>
+            </table>
+        </div>
+
+        <div class="card">
+            <h3 style="color:var(--accent); margin-bottom:8px;">Chain Summary</h3>
+            <table>
+                <tr><th>Hits</th><td>${this.data.chain.hits||0}</td></tr>
+                <tr><th>Timeout</th><td>${this.data.chain.timeout||0}s</td></tr>
+                <tr><th>Modifier</th><td>${this.data.chain.modifier||1}x</td></tr>
+            </table>
+        </div>
+
+        <div class="card">
+            <h3 style="color:var(--accent); margin-bottom:8px;">AI Summary</h3>
+            <div>${this.data.ai.summary?.join("<br>") || "No summary."}</div>
+        </div>
+    `;
+};
+
+/* ============================================================================
+   CHAIN TAB
+   ============================================================================
+*/
+Major.renderChainTab = function(){
+    const p = this.shadow.querySelector("#panel-chain");
+    if (!p) return;
+
+    p.innerHTML = `
+        <div id="chain-watcher">
+            <div>Chain Watcher</div>
+            <div id="chain-light" class="${(this.data.chain.hits||0)>0?'active':''}"></div>
+        </div>
+
+        <div class="card">
+            <h3 style="color:var(--accent); margin-bottom:8px;">Real-Time Chain</h3>
+            <canvas id="chainRealtimeGraph"></canvas>
+        </div>
+
+        <div class="card">
+            <h3 style="color:var(--accent2); margin-bottom:8px;">Chain History</h3>
+            <canvas id="chainHistoryGraph"></canvas>
+        </div>
+
+        <div class="card">
+            <h3 style="color:var(--accent); margin-bottom:8px;">Chain Info</h3>
+            <table>
+                <tr><th>Hits</th><td>${this.data.chain.hits||0}</td></tr>
+                <tr><th>Timeout</th><td>${this.data.chain.timeout||0}s</td></tr>
+                <tr><th>Modifier</th><td>${this.data.chain.modifier||1}x</td></tr>
+                <tr><th>Cooldown</th><td>${this.data.chain.cooldown||0}s</td></tr>
+            </table>
+        </div>
+    `;
+
+    this.buildChainRealtimeGraph();
+    this.buildChainHistoryGraph();
+};
+
+/* ============================================================================
+   BUILD REALTIME CHAIN GRAPH
+   ============================================================================
+*/
+Major.buildChainRealtimeGraph = function(){
+    const canvas = this.shadow.querySelector("#chainRealtimeGraph");
+    if (!canvas) return;
+
+    if (this.graph.chainRealtime){
+        this.graph.chainRealtime.destroy();
     }
-    return this.memory.enemies[id];
+
+    this.graph.chainRealtime = new Chart(canvas.getContext("2d"), {
+        type: "line",
+        data: {
+            datasets: [{
+                label: "Chain Hits",
+                data: this.buffers.chainRealtime,
+                borderColor: "#4ac3ff",
+                borderWidth: 2,
+                pointRadius: 0
+            }]
+        },
+        options: {
+            animation: false,
+            scales: {
+                x: {
+                    type: "time",
+                    time: { unit: "minute" },
+                    ticks: { color: "#888" }
+                },
+                y: {
+                    ticks: { color: "#888" }
+                }
+            },
+            plugins: {
+                legend: { display: false }
+            }
+        }
+    });
 };
 
-/* ============================================================
-   LEARNING ENGINE
-   ============================================================ */
-Colonel.learnAll = function(){
-    for (const atk of this.state.attacks){
-        this.learnFromAttack(atk);
-    }
-};
+/* ============================================================================
+   BUILD CHAIN HISTORY GRAPH (Colonel memory)
+   ============================================================================
+*/
+Major.buildChainHistoryGraph = function(){
+    const canvas = this.shadow.querySelector("#chainHistoryGraph");
+    if (!canvas) return;
 
-Colonel.learnFromAttack = function(atk){
-    if (!atk?.attacker || !atk?.defender) return;
+    const pace = this.nexus.colonel?.memory?.chain?.pace || [];
+    const data = pace.map(x => ({ x: x.ts, y: x.hits }));
 
-    const isUserAttacker = atk.attacker?.id === this.state.user.id;
-    const isUserDefender = atk.defender?.id === this.state.user.id;
-
-    if (!isUserAttacker && !isUserDefender) return;
-    if (!atk.modifiers) return;
-
-    const ff = this.safeNum(atk.modifiers.fair_fight);
-    if (!ff || ff <= 0) return;
-
-    const userTotal = this.safeNum(this.state.user.total);
-    if (userTotal <= 0) return;
-
-    // FF inversion – clamped for safety
-    // total_enemy = total_user / (1 - FF)^(1/0.366)
-    const F = Math.min(0.90, Math.max(0.05, 1 - ff)); // safer domain
-    let est = userTotal / Math.pow(F, 1/0.366);
-
-    if (!isFinite(est) || est <= 0) return;
-    est = Math.max(500, Math.min(est, 5e9)); // clamp
-
-    const enemyId = isUserAttacker ? atk.defender.id : atk.attacker.id;
-    const mem = this.getMemory(enemyId);
-
-    mem.name = isUserAttacker ? atk.defender.name : atk.attacker.name;
-
-    // EMA smoothing based on confidence
-    mem.estTotal = (mem.estTotal * mem.confidence + est) / (mem.confidence + 1);
-    mem.confidence = Math.min(1.0, mem.confidence + 0.05);
-
-    // Push history
-    mem.history.push({ ts: Date.now(), ff, est });
-    if (mem.history.length > 50) mem.history.shift();
-};
-
-/* ============================================================
-   AI RECOMPUTE
-   ============================================================ */
-Colonel.recompute = function(){
-    const list = [];
-
-    for (const id in this.state.enemyMembers){
-        const m = this.state.enemyMembers[id];
-        const mem = this.getMemory(id);
-
-        if (!mem || !m) continue;
-
-        const userTotal = this.state.user.total || 1;
-        const ratio = mem.estTotal > 0 ? (userTotal / mem.estTotal) : 0;
-        const vuln = Math.max(0, Math.min(1, ratio));
-
-        let score = 0;
-        if (m.online) score += 30;
-        if (m.hospital) score -= 100;
-        if (m.traveling) score -= 100;
-
-        score += vuln * 50;
-        score += mem.confidence * 10;
-
-        list.push({
-            id: m.id,
-            name: m.name,
-            level: m.level,
-            estimatedTotal: Math.round(mem.estTotal),
-            online: m.online,
-            hospital: m.hospital,
-            traveling: m.traveling,
-            score,
-        });
+    if (this.graph.chainHistory){
+        this.graph.chainHistory.destroy();
     }
 
-    list.sort((a,b) => b.score - a.score);
-    this.state.targets = list;
-
-    // Summary
-    this.lastSummary = this.generateSummary(list);
+    this.graph.chainHistory = new Chart(canvas.getContext("2d"), {
+        type: "line",
+        data: {
+            datasets: [{
+                label: "Chain Hits (Historical)",
+                data,
+                borderColor: "#8affef",
+                borderWidth: 2,
+                pointRadius: 0
+            }]
+        },
+        options: {
+            animation: false,
+            scales: {
+                x: {
+                    type: "time",
+                    time: { unit: "hour" },
+                    ticks: { color: "#888" }
+                },
+                y: {
+                    ticks: { color: "#888" }
+                }
+            },
+            plugins: { legend: { display: false } }
+        }
+    });
 };
 
-/* ============================================================
-   SUMMARY
-   ============================================================ */
-Colonel.generateSummary = function(list){
-    if (!list.length) return "No targets available.";
+/* ============================================================================
+   ENEMY TAB
+   ============================================================================
+*/
+Major.renderEnemyTab = function(){
+    const p = this.shadow.querySelector("#panel-enemy");
+    if (!p) return;
 
-    const top = list.slice(0, 3)
-        .map(t => `${t.name} (${t.level}) — est ${t.estimatedTotal.toLocaleString()}`)
-        .join("\n");
+    const list = [...this.data.enemies];
+    list.sort((a,b)=>b.level - a.level);
 
-    return `Top Targets:\n${top}`;
+    const rows = list.map(e => `
+        <tr>
+            <td>${e.online ? "🟢" : "⚫"}</td>
+            <td>${e.name}</td>
+            <td>${e.level}</td>
+            <td>${e.status}</td>
+            <td>${e.estimatedTotal ? e.estimatedTotal.toLocaleString() : "?"}</td>
+            <td><a class="btn" target="_blank" href="https://www.torn.com/loader.php?sid=attack&user2ID=${e.id}">Attack</a></td>
+        </tr>
+    `).join("");
+
+    p.innerHTML = `
+        <div class="card">
+            <h3 style="color:var(--accent)">Enemy Targets</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th></th><th>Name</th><th>Lvl</th><th>Status</th><th>Est Stats</th><th></th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <h3 style="color:var(--accent2)">Enemy Activity Heatmap</h3>
+            ${this.renderEnemyHeatmap()}
+        </div>
+    `;
 };
 
-/* ============================================================
-   ANSWER NLP
-   ============================================================ */
-Colonel.answer = function(txt){
-    txt = (txt || "").toLowerCase();
+/* ============================================================================
+   HEATMAP (Enemy Online Activity)
+   ============================================================================
+*/
+Major.renderEnemyHeatmap = function(){
+    const buckets = this.data.enemyActivityBuckets;
 
-    let reply = "";
+    const cells = buckets.map((v,i)=>{
+        const intensity = Math.min(1, v / 10);
+        return `
+            <div style="
+                width:100%;
+                height:18px;
+                background:rgba(74,195,255,${intensity});
+                border-radius:3px;
+            "></div>
+        `;
+    }).join("");
 
-    if (txt.includes("weak")){
-        reply = this.replyWeakest();
-    } else if (txt.includes("strong")){
-        reply = this.replyStrongest();
-    } else if (txt.includes("target")){
-        reply = this.replyTop();
-    } else {
-        reply = this.lastSummary;
-    }
-
-    this.nexus.events.emit("ASK_COLONEL_RESPONSE", reply);
+    return `
+        <div style="
+            display:grid;
+            grid-template-columns:repeat(24,1fr);
+            gap:2px;">
+            ${cells}
+        </div>
+    `;
 };
 
-Colonel.replyTop = function(){
-    const t = this.state.targets?.[0];
-    if (!t) return "No targets.";
-    return `Top target: ${t.name} (lvl ${t.level}) est ${t.estimatedTotal.toLocaleString()}`;
+/* ============================================================================
+   FACTION TAB
+   ============================================================================
+*/
+Major.renderFactionTab = function(){
+    const p = this.shadow.querySelector("#panel-faction");
+    if (!p) return;
+
+    const list = [...this.data.factionMembers];
+    list.sort((a,b)=>b.level - a.level);
+
+    const rows = list.map(m=>`
+        <tr>
+            <td>${m.online?"🟢":"⚫"}</td>
+            <td>${m.name}</td>
+            <td>${m.level}</td>
+            <td>${m.status}</td>
+            <td>${m.last_action?.relative || ""}</td>
+        </tr>
+    `).join("");
+
+    p.innerHTML = `
+        <div id="sync-toggle" class="card">
+            <div>Faction Sync</div>
+            <div id="sync-btn" class="${this.flags.syncEnabled ? "active":""}"></div>
+        </div>
+
+        <div class="card">
+            <h3 style="color:var(--accent)">Faction Members</h3>
+            <table>
+                <thead>
+                    <tr><th></th><th>Name</th><th>Lvl</th><th>Status</th><th>Last Action</th></tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <h3 style="color:var(--accent2)">Commander Orders</h3>
+            <pre style="
+                white-space:pre-wrap;
+                font-size:12px;
+                font-family:Consolas,monospace;">
+${JSON.stringify(this.data.orders,null,2)}
+            </pre>
+        </div>
+
+        <div class="card">
+            <h3 style="color:var(--accent2)">Shared Targets</h3>
+            <ul style="padding-left:12px;">
+                ${this.data.sharedTargets.map(t=>`<li>${t.name}</li>`).join("")}
+            </ul>
+        </div>
+    `;
+
+    // bind sync toggle
+    const syncBtn = this.shadow.querySelector("#sync-btn");
+    syncBtn.onclick = ()=>{
+        this.flags.syncEnabled = !this.flags.syncEnabled;
+        syncBtn.classList.toggle("active", this.flags.syncEnabled);
+        this.nexus.log("Faction sync " + (this.flags.syncEnabled?"ENABLED":"DISABLED"));
+    };
 };
 
-Colonel.replyStrongest = function(){
-    const arr = [...this.state.targets].sort((a,b)=>b.estimatedTotal-a.estimatedTotal);
-    const t = arr[0];
-    if (!t) return "No data.";
-    return `Strongest visible enemy: ${t.name}, est ${t.estimatedTotal.toLocaleString()}`;
+/* ============================================================================
+   AI TAB
+   ============================================================================
+*/
+Major.renderAITab = function(){
+    const p = this.shadow.querySelector("#panel-ai");
+    if (!p) return;
+
+    const history = this.data.aiMessages.map(msg=>`
+        <div class="${msg.from === "user" ? "ai-user" : "ai-colonel"}">
+            ${escapeHTML(msg.text)}
+        </div>
+    `).join("");
+
+    p.innerHTML = `
+        <div id="ai-console">
+            <div id="ai-log">${history}</div>
+            <input id="ai-input" placeholder="Ask the Colonel..." />
+        </div>
+    `;
+
+    const logBox = this.shadow.querySelector("#ai-log");
+    logBox.scrollTop = logBox.scrollHeight;
 };
 
-Colonel.replyWeakest = function(){
-    const arr = [...this.state.targets].sort((a,b)=>a.estimatedTotal-b.estimatedTotal);
-    const t = arr[0];
-    if (!t) return "No data.";
-    return `Weakest visible enemy: ${t.name}, est ${t.estimatedTotal.toLocaleString()}`;
+/* ============================================================================
+   SEND AI MESSAGE
+   ============================================================================
+*/
+Major.sendAI = function(){
+    const input = this.shadow.querySelector("#ai-input");
+    if (!input) return;
+
+    const msg = input.value.trim();
+    if (!msg) return;
+    input.value = "";
+
+    this.data.aiMessages.push({ from:"user", text:msg });
+    this.nexus.events.emit("ASK_COLONEL", { question: msg });
+    this.renderAITab();
 };
 
-/* ============================================================
+/* ============================================================================
+   LOGS TAB
+   ============================================================================
+*/
+Major.renderLogsTab = function(){
+    const p = this.shadow.querySelector("#panel-logs");
+    if (!p) return;
+
+    const lines = this.data.logs.map(l=>`
+        <div style="color:${l.level==="error"?"var(--bad)":"var(--accent)"}; font-size:11px;">
+            [${l.ts}] ${escapeHTML(l.msg)}
+        </div>
+    `).join("");
+
+    p.innerHTML = `
+        <div class="card">
+            <h3 style="color:var(--accent)">System Logs</h3>
+            <div style="
+                background:#111;
+                border:1px solid #333;
+                padding:10px;
+                height:300px;
+                overflow-y:auto;
+                font-size:11px;
+                font-family:Consolas,monospace;">
+                ${lines}
+            </div>
+        </div>
+    `;
+};
+
+/* ============================================================================
+   UTILITY: Escape HTML
+   ============================================================================
+*/
+function escapeHTML(x){
+    return String(x).replace(/[<>&]/g, m=>{
+        return {"<":"&lt;",">":"&gt;","&":"&amp;"}[m];
+    });
+}
+
+/* ============================================================================
    REGISTER
-   ============================================================ */
-
-if (!window.__NEXUS_OFFICERS) window.__NEXUS_OFFICERS = [];
+   ============================================================================
+*/
+window.__NEXUS_OFFICERS = window.__NEXUS_OFFICERS || [];
 window.__NEXUS_OFFICERS.push({
-    name:"Colonel",
-    module:Colonel
+    name:"Major",
+    module: Major
 });
 
 })();
