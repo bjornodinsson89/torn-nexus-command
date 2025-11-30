@@ -1,8 +1,3 @@
-// major.js — WAR NEXUS 3.0.3
-// Minimal Tactical UI (C1) — Complete Rewrite
-// Compact mobile-friendly drawer, full graphs, tables, AI chat,
-// chain watcher, sync toggle, member updates, enemy dashboards,
-// war UI, and more. Zero placeholders. Fully functional.
 
 (function(){
 "use strict";
