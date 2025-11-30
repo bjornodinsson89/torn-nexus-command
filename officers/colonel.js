@@ -7,905 +7,432 @@
 (function(){
 "use strict";
 
-/* ============================================================================
-   MAJOR — TACTICAL UI MODULE (WAR NEXUS 3.0.3)
-   ============================================================================
-*/
-
-const Major = {
+const Colonel = {
     nexus: null,
-    host: null,
-    shadow: null,
+    mode: "HYBRID",
+    nlMode: true,
 
-    // UI state
-    flags: {
-        drawerOpen: false,
-        syncEnabled: true,
-        chainActive: false,
+    memory: {
+        enemy: {},
+        chain: { pace: [] },
+        weights: {
+            hybrid:  { online: 0.6, vuln: 0.4, threat: 0.2 },
+            aggro:   { online: 0.8, vuln: 0.2, threat: 0.1 },
+            cautious:{ online: 0.3, vuln: 0.7, threat: 0.4 }
+        },
+        lastSync: 0
     },
 
-    // Data cache
-    data: {
+    state: {
         user: {},
         faction: {},
-        factionMembers: [],
-        enemies: [],
-        targets: [],
+        factionMembers: {},
         chain: {},
-        ai: {},
-        aiMessages: [],
-        logs: [],
-        sharedTargets: [],
-        orders: {},
-        chainHistory: [],
-        enemyActivityBuckets: new Array(24).fill(0),
+        war: {},
+        enemyFactions: [],
+        enemyMembers: {},
+        attacks: []
     },
 
-    // Graph handles
-    graph: {
-        chainRealtime: null,
-        chainHistory: null,
-    },
-
-    // Live buffers
-    buffers: {
-        chainRealtime: [],
-    },
-
-    MAX_LOGS: 400,
+    ai: {
+        topTargets: [],
+        summary: "",
+        mode: "HYBRID",
+        threat: "unknown",
+        instability: 0,
+        prediction:{}
+    }
 };
 
-/* ============================================================================
-   INIT
-   ============================================================================
-*/
-Major.init = function(nexus){
-    this.nexus = nexus;
+/* ============================================================
+   INIT / WIRING
+   ============================================================ */
+Colonel.init = function(nx){
+    this.nexus = nx;
 
-    this.createHost();
-    this.renderBase();
-    this.bindEvents();
-    this.bindNexusEvents();
-
-    nexus.log("Major 3.0.3 UI Initialized");
+    nx.events.on("RAW_INTEL", d => this.ingestIntel(d));
+    nx.events.on("AI_MEMORY_UPDATE", m => { if(m) this.memory = m; });
+    nx.events.on("SET_AI_MODE", mode => {
+        this.mode = mode;
+        this.ai.mode = mode;
+        this.recomputeAI();
+    });
+    nx.events.on("ASK_COLONEL", q => this.answerQuery(q));
 };
 
-/* ============================================================================
-   HOST + SHADOW ROOT
-   ============================================================================
-*/
-Major.createHost = function(){
-    if (document.getElementById("warlab-major-ui")) return;
-
-    this.host = document.createElement("div");
-    this.host.id = "warlab-major-ui";
-    this.shadow = this.host.attachShadow({ mode: "open" });
-
-    document.body.appendChild(this.host);
+/* ============================================================
+   SAFE NORMALIZATION HELPERS
+   ============================================================ */
+Colonel.safeArray = function(x){
+    return Array.isArray(x) ? x : [];
+};
+Colonel.safeObj = function(x){
+    return (x && typeof x === "object") ? x : {};
 };
 
-/* ============================================================================
-   BASE UI RENDER
-   ============================================================================
-*/
-Major.renderBase = function(){
-    this.shadow.innerHTML = `
-    <style>
-        :host {
-            --bg:#0f0f0f;
-            --panel:#181818;
-            --hover:#1f1f1f;
-            --border:#222;
-            --text:#e0e0e0;
-            --mute:#8a8a8a;
-            --accent:#4ac3ff;
-            --accent2:#8affef;
-            --good:#73ff73;
-            --warn:#ffdd55;
-            --bad:#ff5555;
-            --font:'Segoe UI',Roboto,Arial,sans-serif;
-            --radius:6px;
-        }
-        *, *::before, *::after { box-sizing:border-box; }
+/* ============================================================
+   INGEST INTEL — FULLY SAFETY-HARDENED
+   ============================================================ */
+Colonel.ingestIntel = function(d){
+    try {
+        d = this.safeObj(d);
 
-        /* Trigger Button */
-        #nexus-trigger {
-            position:fixed;
-            bottom:18px;
-            right:18px;
-            width:52px;
-            height:52px;
-            border-radius:8px;
-            background:var(--panel);
-            border:1px solid var(--accent);
-            color:var(--accent);
-            display:flex;
-            align-items:center;
-            justify-content:center;
-            font-family:var(--font);
-            font-size:22px;
-            cursor:pointer;
-            z-index:999999;
-            transition:0.2s;
-        }
-        #nexus-trigger:hover {
-            background:var(--hover);
-            box-shadow:0 0 8px var(--accent);
-        }
+        // ✅ FIX: guard against missing faction on light intel
+        const factionObj = this.safeObj(d.faction);
 
-        /* Drawer */
-        #drawer {
-            position:fixed;
-            top:0;
-            right:0;
-            width:340px;
-            max-width:90%;
-            height:100vh;
-            background:var(--bg);
-            border-left:1px solid var(--border);
-            transform:translateX(100%);
-            transition:transform .22s ease;
-            z-index:999998;
-            display:flex;
-            flex-direction:column;
-        }
-        #drawer.open {
-            transform:translateX(0%);
-            box-shadow:-4px 0 12px rgba(0,0,0,.7);
-        }
+        this.state.user = this.safeObj(d.user);
+        this.state.faction = factionObj;
+        this.state.factionMembers = this.safeObj(factionObj.members);
 
-        /* Drawer Header */
-        #drawer-header {
-            padding:12px;
-            background:#111;
-            color:var(--accent);
-            font-size:16px;
-            font-weight:600;
-            text-align:center;
-            border-bottom:1px solid var(--border);
-            position:relative;
-        }
-        #drawer-close {
-            position:absolute;
-            right:10px;
-            top:8px;
-            color:var(--text);
-            cursor:pointer;
-            font-size:18px;
-        }
-        #drawer-close:hover {
-            color:var(--accent);
-        }
+        this.state.chain = this.safeObj(d.chain);
+        this.state.war   = this.safeObj(d.war);
 
-        /* Tabs */
-        #tabs {
-            display:flex;
-            background:#101010;
-            border-bottom:1px solid var(--border);
-        }
-        #tabs button {
-            flex:1;
-            padding:10px 0;
-            background:#101010;
-            color:var(--mute);
-            border:0;
-            font-size:12px;
-            cursor:pointer;
-            transition:0.2s;
-            font-family:var(--font);
-        }
-        #tabs button.active {
-            color:var(--accent);
-            border-bottom:2px solid var(--accent);
-        }
-        #tabs button:hover {
-            color:var(--accent2);
-        }
+        const enemyFactions = this.safeArray(d.enemyFaction);
+        const enemyFlat     = this.safeObj(d.enemyMembersFlat);
 
-        /* Panels container */
-        #panels {
-            flex:1;
-            overflow-y:auto;
-            padding:12px;
-            color:var(--text);
-            font-family:var(--font);
-        }
-        .panel { display:none; }
-        .panel.active { display:block; }
+        this.state.enemyFactions = enemyFactions;
 
-        /* Card */
-        .card {
-            background:var(--panel);
-            border:1px solid var(--border);
-            padding:12px;
-            border-radius:var(--radius);
-            margin-bottom:12px;
-        }
+        const map = {};
+        for (const id in enemyFlat) map[id] = enemyFlat[id];
+        this.state.enemyMembers = map;
 
-        /* Tables */
-        table {
-            width:100%;
-            border-collapse:collapse;
-            font-size:12px;
-        }
-        th {
-            padding:6px;
-            text-align:left;
-            border-bottom:1px solid var(--border);
-            background:#121212;
-            color:var(--accent2);
-        }
-        td {
-            padding:6px;
-            border-bottom:1px solid #222;
-            color:var(--text);
-        }
+        this.state.attacks = this.safeArray(d.attacks);
 
-        /* Buttons */
-        .btn {
-            padding:4px 8px;
-            background:#121212;
-            border:1px solid var(--border);
-            border-radius:var(--radius);
-            color:var(--text);
-            cursor:pointer;
-            font-size:12px;
-        }
-        .btn:hover {
-            border-color:var(--accent);
-            color:var(--accent);
-        }
+        this.learn(d);
+        this.recomputeAI();
+        this.pushSitrep();
 
-        /* AI Console */
-        #ai-console {
-            background:#111;
-            padding:12px;
-            border:1px solid var(--border);
-            border-radius:var(--radius);
-        }
-        #ai-log {
-            max-height:260px;
-            overflow-y:auto;
-            font-family:Consolas,monospace;
-            margin-bottom:10px;
-        }
-        .ai-user { color:var(--accent2); margin-bottom:4px; }
-        .ai-colonel { color:var(--accent); margin-bottom:6px; }
-
-        #ai-input {
-            width:100%;
-            padding:8px;
-            background:#181818;
-            border:1px solid var(--border);
-            border-radius:var(--radius);
-            color:var(--text);
-            font-family:var(--font);
-        }
-
-        /* Chain Watcher */
-        #chain-watcher {
-            display:flex;
-            justify-content:space-between;
-            align-items:center;
-            background:#111;
-            padding:8px 10px;
-            border-radius:var(--radius);
-            border:1px solid var(--border);
-            margin-bottom:12px;
-        }
-        #chain-light {
-            width:14px;
-            height:14px;
-            background:#444;
-            border-radius:50%;
-        }
-        #chain-light.active {
-            background:var(--good);
-            box-shadow:0 0 8px var(--good);
-        }
-
-        /* Sync Toggle */
-        #sync-toggle {
-            display:flex;
-            align-items:center;
-            justify-content:space-between;
-        }
-        #sync-btn {
-            width:42px;
-            height:22px;
-            background:#333;
-            border-radius:11px;
-            position:relative;
-            cursor:pointer;
-        }
-        #sync-btn::after {
-            content:"";
-            position:absolute;
-            top:3px;
-            left:3px;
-            width:16px;
-            height:16px;
-            background:#aaa;
-            border-radius:50%;
-            transition:.2s;
-        }
-        #sync-btn.active {
-            background:var(--accent);
-        }
-        #sync-btn.active::after {
-            left:22px;
-            background:#fff;
-        }
-
-        /* Graph Canvas */
-        canvas {
-            width:100% !important;
-            height:240px !important;
-        }
-
-    </style>
-
-    <div id="nexus-trigger">≡</div>
-
-    <div id="drawer">
-        <div id="drawer-header">
-            WAR NEXUS — Tactical UI 3.0.3
-            <span id="drawer-close">✕</span>
-        </div>
-
-        <div id="tabs">
-            <button data-tab="overview" class="active">Overview</button>
-            <button data-tab="chain">Chain</button>
-            <button data-tab="enemy">Enemy</button>
-            <button data-tab="faction">Faction</button>
-            <button data-tab="ai">AI</button>
-            <button data-tab="logs">Logs</button>
-        </div>
-
-        <div id="panels">
-            <div id="panel-overview" class="panel active"></div>
-            <div id="panel-chain" class="panel"></div>
-            <div id="panel-enemy" class="panel"></div>
-            <div id="panel-faction" class="panel"></div>
-            <div id="panel-ai" class="panel"></div>
-            <div id="panel-logs" class="panel"></div>
-        </div>
-    </div>
-    `;
+    } catch(e){
+        this.log("ERROR ingestIntel: "+e);
+    }
 };
 
-/* ============================================================================
-   EVENT BINDINGS
-   ============================================================================
-*/
-Major.bindEvents = function(){
-    const trigger = this.shadow.querySelector("#nexus-trigger");
-    const drawer = this.shadow.querySelector("#drawer");
-    const close = this.shadow.querySelector("#drawer-close");
+/* ============================================================
+   LEARNING ENGINE — Updated & Safer
+   ============================================================ */
+Colonel.learn = function(d){
+    const now = Date.now();
+    const attacks = this.safeArray(d.attacks);
+    const enemyFlat = this.safeObj(d.enemyMembersFlat);
 
-    trigger.onclick = () => this.toggleDrawer();
-    close.onclick = () => drawer.classList.remove("open");
+    for (const atk of attacks){
+        const targetId = atk.defender?.id;
+        if (!targetId) continue;
 
-    // Tabs
-    this.shadow.querySelectorAll("#tabs button").forEach(btn=>{
-        btn.onclick = () => {
-            this.setTab(btn.dataset.tab);
+        if (!this.memory.enemy[targetId]){
+            this.memory.enemy[targetId] = {
+                id: targetId,
+                history: [],
+                totalEstimate: null,
+                lastKnown: null,
+                lastOutcome: null,
+                dexRatio: null,
+                confidence: 0.25,
+                lastUpdated: now,
+                attackHistory: []
+            };
+        }
+        this.memory.enemy[targetId].lastUpdated = now;
+    }
+
+    // Track chain pace
+    const hits = this.state.chain.hits || 0;
+    const timeout = this.state.chain.timeout || 0;
+    this.memory.chain.pace.push({ ts:now, hits, timeout });
+    if (this.memory.chain.pace.length > 1000)
+        this.memory.chain.pace.splice(0, 500);
+
+    // Learn from fights
+    for (const atk of this.safeArray(d.attacks)){
+        this.learnFromFight(atk);
+    }
+
+    if (now - this.memory.lastSync > 60000){
+        this.memory.lastSync = now;
+        this.syncMemory();
+    }
+};
+
+/* ============================================================
+   FIGHT LEARNING
+   ============================================================ */
+Colonel.learnFromFight = function(atk){
+    try {
+        if (!atk || !atk.defender || !atk.attacker) return;
+        const defId = atk.defender.id;
+        if (!defId) return;
+
+        const mem = this.memory.enemy[defId] || (this.memory.enemy[defId] = {
+            id: defId,
+            history: [],
+            totalEstimate: null,
+            lastKnown: null,
+            lastOutcome: null,
+            dexRatio: null,
+            confidence: 0.25,
+            lastUpdated: Date.now(),
+            attackHistory: []
+        });
+
+        mem.attackHistory.push({
+            ts: atk.ended || atk.started || Date.now(),
+            result: atk.result || "",
+            respect_gain: atk.respect_gain || 0,
+            chain: atk.chain || 0
+        });
+
+        if (mem.attackHistory.length > 50)
+            mem.attackHistory.splice(0, 25);
+
+        const dmg = atk.modifiers?.damage || 0;
+        if (dmg > 0){
+            mem.totalEstimate = (mem.totalEstimate || dmg) * 0.7 + dmg * 0.3;
+            mem.confidence = Math.min(1, mem.confidence + 0.05);
+        }
+
+    } catch(e){
+        this.log("learnFromFight error: "+e);
+    }
+};
+
+/* ============================================================
+   AI COMPUTATION
+   ============================================================ */
+Colonel.recomputeAI = function(){
+    const enemies = Object.values(this.state.enemyMembers);
+    const userTotal = this.state.user.stats?.total || 1;
+
+    const weights = this.memory.weights[this.mode.toLowerCase()] ||
+                    this.memory.weights.hybrid;
+
+    const scored = enemies.map(e=>{
+        const mem = this.memory.enemy[e.id];
+
+        const estTotal = mem?.totalEstimate || this.estimateBaseline(e);
+
+        let score = 0;
+        const online = e.online ? 1 : 0;
+        const vuln = userTotal / Math.max(estTotal,1);
+        const threat = (estTotal || 1) / Math.max(userTotal,1);
+
+        score += online * (weights.online || 0.5);
+        score += vuln   * (weights.vuln   || 0.4);
+        score -= threat * (weights.threat || 0.2);
+
+        return {
+            id:e.id,
+            name:e.name,
+            level:e.level,
+            online:e.online,
+            estTotal,
+            score,
+            mem
         };
     });
 
-    // AI input
-    this.shadow.addEventListener("keydown", e=>{
-        if (e.target.id === "ai-input" && e.key === "Enter"){
-            this.sendAI();
-        }
+    scored.sort((a,b)=>b.score - a.score);
+
+    this.ai.topTargets = scored;
+
+    const threat = this.computeThreatSummary(scored);
+    const risk = threat.risk || 0;
+
+    const summary = [];
+    if (!enemies.length) summary.push("No enemies detected.");
+    if (enemies.length && scored[0]){
+        summary.push(`Primary: ${scored[0].name} (est ${ (scored[0].estTotal||0).toLocaleString() } stats).`);
+    }
+    if (this.state.chain.hits > 0)
+        summary.push(`Chain at ${this.state.chain.hits} hits, timeout ${this.state.chain.timeout}s.`);
+    if (risk > 0.7) summary.push("High instability in current war.");
+
+    if (!summary.length) summary.push("Situation stable.");
+
+    this.ai.summary = summary.join(" ");
+    this.ai.threat = threat.label || "unknown";
+    this.ai.instability = risk;
+    this.ai.prediction = {};
+};
+
+/* ============================================================
+   THREAT SUMMARY
+   ============================================================ */
+Colonel.computeThreatSummary = function(scored){
+    if (!scored.length) return { label:"none", risk:0 };
+
+    let avg = 0;
+    for (const t of scored){
+        avg += (t.mem?.totalEstimate || t.estTotal || 0);
+    }
+    avg /= scored.length || 1;
+
+    const userTotal = this.state.user.stats?.total || 1;
+    const ratio = avg / Math.max(userTotal,1);
+
+    if (ratio < 0.5) return { label:"favorable", risk:0.2 };
+    if (ratio < 1.2) return { label:"balanced", risk:0.5 };
+    if (ratio < 2.5) return { label:"dangerous", risk:0.7 };
+    return { label:"overwhelming", risk:0.9 };
+};
+
+/* ============================================================
+   STAT BASELINE ESTIMATION
+   ============================================================ */
+Colonel.estimateBaseline = function(e){
+    const level = e.level || 1;
+    return Math.pow(level, 2.2) * 5000;
+};
+
+/* ============================================================
+   SITREP
+   ============================================================ */
+Colonel.pushSitrep = function(){
+    this.nexus.events.emit("SITREP_UPDATE", {
+        user:this.state.user,
+        faction:this.state.faction,
+        factionMembers:Object.values(this.state.factionMembers),
+        chain:this.state.chain,
+        war:this.state.war,
+        enemyFaction:this.state.enemyFactions,
+        enemyMembers:Object.values(this.state.enemyMembers),
+        ai:this.ai
     });
 };
 
-/* ============================================================================
-   DRAWER CONTROL
-   ============================================================================
-*/
-Major.toggleDrawer = function(){
-    const d = this.shadow.querySelector("#drawer");
-    d.classList.toggle("open");
-};
-
-/* ============================================================================
-   TAB SWITCHER
-   ============================================================================
-*/
-Major.setTab = function(tab){
-    this.shadow.querySelectorAll("#tabs button").forEach(btn=>{
-        btn.classList.toggle("active", btn.dataset.tab === tab);
+/* ============================================================
+   MEMORY SYNC
+   ============================================================ */
+Colonel.syncMemory = function(){
+    if (!this.state.faction.id) return;
+    this.nexus.events.emit("AI_MEMORY_WRITE", {
+        path:`factions/${this.state.faction.id}/ai_memory`,
+        payload:this.memory
     });
-
-    this.shadow.querySelectorAll(".panel").forEach(p=>{
-        p.classList.toggle("active", p.id === "panel-"+tab);
-    });
-
-    this.renderTab(tab);
 };
 
-/* ============================================================================
-   NEXUS EVENT STREAMS
-   ============================================================================
-*/
-Major.bindNexusEvents = function(){
-    this.nexus.events.on("SITREP_UPDATE", data => {
-        this.data.user = data.user || {};
-        this.data.faction = data.faction || {};
-        this.data.chain = data.chain || {};
-        this.data.targets = data.ai?.topTargets || [];
-        this.data.ai = data.ai || {};
-        this.data.enemies = data.enemyMembers || [];
-        this.data.factionMembers = data.factionMembers || [];
+/* ============================================================
+   ANSWER CHAT QUERIES
+   ============================================================ */
+Colonel.answerQuery = function(payload){
+    const q = (payload.question||"").trim();
+    if (!q) return this.respond("What do you need?");
 
-        this.processRealtimeChain();
-        this.renderActiveTab();
-    });
+    const L = q.toLowerCase();
 
-    this.nexus.events.on("ASK_COLONEL_RESPONSE", msg=>{
-        this.data.aiMessages.push({ from:"colonel", text:msg });
-        this.renderAITab();
-    });
+    // Expanded NLP routing
+    if (/who.*attack/.test(L)) return this.cmdRecommendTarget();
+    if (/best.*target/.test(L)) return this.cmdRecommendTarget();
+    if (/weak.*enemy/.test(L)) return this.cmdWeakEnemies();
+    if (/strong.*enemy/.test(L)) return this.cmdStrongestEnemy();
+    if (/threat/.test(L)) return this.cmdThreat();
+    if (/chain.*status/.test(L)) return this.cmdChainStatus();
+    if (/war.*status/.test(L)) return this.cmdWarStatus();
+    if (/expand|details|full/.test(L)) return this.cmdExpanded();
+    if (/list.*targets/.test(L)) return this.cmdListTargets();
+    if (/enemy.*list/.test(L)) return this.cmdListEnemies();
+    if (/predict/.test(L)) return this.cmdPredict();
+    if (/compare (.+) to (.+)/.test(L)) return this.cmdCompare(L);
 
-    this.nexus.events.on("SHARED_TARGETS_UPDATED", list=>{
-        this.data.sharedTargets = list;
-        this.renderFactionTab();
-    });
-
-    this.nexus.events.on("COMMANDER_ORDERS", ord=>{
-        this.data.orders = ord;
-        this.renderFactionTab();
-    });
-
-    const oldLog = this.nexus.log;
-    this.nexus.log = txt=>{
-        this.pushLog(txt);
-        oldLog(txt);
-    };
-};
-
-/* ============================================================================
-   LOGGING
-   ============================================================================
-*/
-Major.pushLog = function(msg, level="info"){
-    const t = new Date().toLocaleTimeString();
-    this.data.logs.push({ ts:t, msg, level });
-
-    if (this.data.logs.length > this.MAX_LOGS)
-        this.data.logs.splice(0, 50);
-
-    if (this.currentTab === "logs") this.renderLogsTab();
-};
-
-/* ============================================================================
-   REALTIME CHAIN PROCESSING
-   ============================================================================
-*/
-Major.processRealtimeChain = function(){
-    const now = Date.now();
-    const hits = this.data.chain?.hits || 0;
-
-    this.buffers.chainRealtime.push({ x: now, y: hits });
-
-    if (this.buffers.chainRealtime.length > 180)
-        this.buffers.chainRealtime.splice(0, 60);
-
-    // Chain watcher
-    const light = this.shadow.querySelector("#chain-light");
-    if (!light) return;
-    light.classList.toggle("active", hits > 0);
-};
-
-/* ============================================================================
-   TAB RENDER DISPATCHER
-   ============================================================================
-*/
-Major.renderTab = function(tab){
-    if (tab === "overview") return this.renderOverviewTab();
-    if (tab === "chain") return this.renderChainTab();
-    if (tab === "enemy") return this.renderEnemyTab();
-    if (tab === "faction") return this.renderFactionTab();
-    if (tab === "ai") return this.renderAITab();
-    if (tab === "logs") return this.renderLogsTab();
-};
-
-Major.renderActiveTab = function(){
-    const active = this.shadow.querySelector("#tabs button.active");
-    if (active) this.renderTab(active.dataset.tab);
-};
-
-/* ============================================================================
-   OVERVIEW TAB
-   ============================================================================
-*/
-Major.renderOverviewTab = function(){
-    const p = this.shadow.querySelector("#panel-overview");
-    if (!p) return;
-
-    const u = this.data.user;
-
-    p.innerHTML = `
-        <div class="card">
-            <h3 style="color:var(--accent); margin-bottom:8px;">Operator</h3>
-            <table>
-                <tr><th>Name</th><td>${u.name||"?"}</td></tr>
-                <tr><th>Level</th><td>${u.level||"?"}</td></tr>
-                <tr><th>Status</th><td>${u.status||"?"}</td></tr>
-                <tr><th>HP</th><td>${u.hp||0}/${u.max_hp||0}</td></tr>
-                <tr><th>Energy</th><td>${u.bars?.energy?.current||0}/${u.bars?.energy?.maximum||0}</td></tr>
-                <tr><th>Nerve</th><td>${u.bars?.nerve?.current||0}/${u.bars?.nerve?.maximum||0}</td></tr>
-            </table>
-        </div>
-
-        <div class="card">
-            <h3 style="color:var(--accent); margin-bottom:8px;">Chain Summary</h3>
-            <table>
-                <tr><th>Hits</th><td>${this.data.chain.hits||0}</td></tr>
-                <tr><th>Timeout</th><td>${this.data.chain.timeout||0}s</td></tr>
-                <tr><th>Modifier</th><td>${this.data.chain.modifier||1}x</td></tr>
-            </table>
-        </div>
-
-        <div class="card">
-            <h3 style="color:var(--accent); margin-bottom:8px;">AI Summary</h3>
-            <div>${this.data.ai.summary?.join("<br>") || "No summary."}</div>
-        </div>
-    `;
-};
-
-/* ============================================================================
-   CHAIN TAB
-   ============================================================================
-*/
-Major.renderChainTab = function(){
-    const p = this.shadow.querySelector("#panel-chain");
-    if (!p) return;
-
-    p.innerHTML = `
-        <div id="chain-watcher">
-            <div>Chain Watcher</div>
-            <div id="chain-light" class="${(this.data.chain.hits||0)>0?'active':''}"></div>
-        </div>
-
-        <div class="card">
-            <h3 style="color:var(--accent); margin-bottom:8px;">Real-Time Chain</h3>
-            <canvas id="chainRealtimeGraph"></canvas>
-        </div>
-
-        <div class="card">
-            <h3 style="color:var(--accent2); margin-bottom:8px;">Chain History</h3>
-            <canvas id="chainHistoryGraph"></canvas>
-        </div>
-
-        <div class="card">
-            <h3 style="color:var(--accent); margin-bottom:8px;">Chain Info</h3>
-            <table>
-                <tr><th>Hits</th><td>${this.data.chain.hits||0}</td></tr>
-                <tr><th>Timeout</th><td>${this.data.chain.timeout||0}s</td></tr>
-                <tr><th>Modifier</th><td>${this.data.chain.modifier||1}x</td></tr>
-                <tr><th>Cooldown</th><td>${this.data.chain.cooldown||0}s</td></tr>
-            </table>
-        </div>
-    `;
-
-    this.buildChainRealtimeGraph();
-    this.buildChainHistoryGraph();
-};
-
-/* ============================================================================
-   BUILD REALTIME CHAIN GRAPH
-   ============================================================================
-*/
-Major.buildChainRealtimeGraph = function(){
-    const canvas = this.shadow.querySelector("#chainRealtimeGraph");
-    if (!canvas) return;
-
-    if (this.graph.chainRealtime){
-        this.graph.chainRealtime.destroy();
+    // Target by name
+    const targetMatch = L.match(/target (.+)/);
+    if (targetMatch){
+        return this.cmdTargetSpecific(targetMatch[1]);
     }
 
-    this.graph.chainRealtime = new Chart(canvas.getContext("2d"), {
-        type: "line",
-        data: {
-            datasets: [{
-                label: "Chain Hits",
-                data: this.buffers.chainRealtime,
-                borderColor: "#4ac3ff",
-                borderWidth: 2,
-                pointRadius: 0
-            }]
-        },
-        options: {
-            animation: false,
-            scales: {
-                x: {
-                    type: "time",
-                    time: { unit: "minute" },
-                    ticks: { color: "#888" }
-                },
-                y: {
-                    ticks: { color: "#888" }
-                }
-            },
-            plugins: {
-                legend: { display: false }
-            }
-        }
-    });
+    // Unknown
+    return this.respond("Clarify your request. Say 'help' for options.");
 };
 
-/* ============================================================================
-   BUILD CHAIN HISTORY GRAPH (Colonel memory)
-   ============================================================================
-*/
-Major.buildChainHistoryGraph = function(){
-    const canvas = this.shadow.querySelector("#chainHistoryGraph");
-    if (!canvas) return;
-
-    const pace = this.nexus.colonel?.memory?.chain?.pace || [];
-    const data = pace.map(x => ({ x: x.ts, y: x.hits }));
-
-    if (this.graph.chainHistory){
-        this.graph.chainHistory.destroy();
-    }
-
-    this.graph.chainHistory = new Chart(canvas.getContext("2d"), {
-        type: "line",
-        data: {
-            datasets: [{
-                label: "Chain Hits (Historical)",
-                data,
-                borderColor: "#8affef",
-                borderWidth: 2,
-                pointRadius: 0
-            }]
-        },
-        options: {
-            animation: false,
-            scales: {
-                x: {
-                    type: "time",
-                    time: { unit: "hour" },
-                    ticks: { color: "#888" }
-                },
-                y: {
-                    ticks: { color: "#888" }
-                }
-            },
-            plugins: { legend: { display: false } }
-        }
-    });
+/* ============================================================
+   COMMAND RESPONSES
+   ============================================================ */
+Colonel.respond = function(text){
+    this.nexus.events.emit("ASK_COLONEL_RESPONSE", { answer:text });
 };
 
-/* ============================================================================
-   ENEMY TAB
-   ============================================================================
-*/
-Major.renderEnemyTab = function(){
-    const p = this.shadow.querySelector("#panel-enemy");
-    if (!p) return;
-
-    const list = [...this.data.enemies];
-    list.sort((a,b)=>b.level - a.level);
-
-    const rows = list.map(e => `
-        <tr>
-            <td>${e.online ? "🟢" : "⚫"}</td>
-            <td>${e.name}</td>
-            <td>${e.level}</td>
-            <td>${e.status}</td>
-            <td>${e.estimatedTotal ? e.estimatedTotal.toLocaleString() : "?"}</td>
-            <td><a class="btn" target="_blank" href="https://www.torn.com/loader.php?sid=attack&user2ID=${e.id}">Attack</a></td>
-        </tr>
-    `).join("");
-
-    p.innerHTML = `
-        <div class="card">
-            <h3 style="color:var(--accent)">Enemy Targets</h3>
-            <table>
-                <thead>
-                    <tr>
-                        <th></th><th>Name</th><th>Lvl</th><th>Status</th><th>Est Stats</th><th></th>
-                    </tr>
-                </thead>
-                <tbody>${rows}</tbody>
-            </table>
-        </div>
-
-        <div class="card">
-            <h3 style="color:var(--accent2)">Enemy Activity Heatmap</h3>
-            ${this.renderEnemyHeatmap()}
-        </div>
-    `;
+Colonel.cmdRecommendTarget = function(){
+    const t = this.ai.topTargets[0];
+    if (!t) return this.respond("No valid targets detected.");
+    this.respond(`Primary target: <b>${t.name}</b> — estimated ${t.estimatedTotal.toLocaleString()} stats.`);
 };
 
-/* ============================================================================
-   HEATMAP (Enemy Online Activity)
-   ============================================================================
-*/
-Major.renderEnemyHeatmap = function(){
-    const buckets = this.data.enemyActivityBuckets;
-
-    const cells = buckets.map((v,i)=>{
-        const intensity = Math.min(1, v / 10);
-        return `
-            <div style="
-                width:100%;
-                height:18px;
-                background:rgba(74,195,255,${intensity});
-                border-radius:3px;
-            "></div>
-        `;
-    }).join("");
-
-    return `
-        <div style="
-            display:grid;
-            grid-template-columns:repeat(24,1fr);
-            gap:2px;">
-            ${cells}
-        </div>
-    `;
+Colonel.cmdWeakEnemies = function(){
+    const arr = this.ai.topTargets.slice(-3);
+    if (!arr.length) return this.respond("No weak targets available.");
+    const names = arr.map(e=>e.name).join(", ");
+    this.respond(`Weakest viable targets: ${names}.`);
 };
 
-/* ============================================================================
-   FACTION TAB
-   ============================================================================
-*/
-Major.renderFactionTab = function(){
-    const p = this.shadow.querySelector("#panel-faction");
-    if (!p) return;
-
-    const list = [...this.data.factionMembers];
-    list.sort((a,b)=>b.level - a.level);
-
-    const rows = list.map(m=>`
-        <tr>
-            <td>${m.online?"🟢":"⚫"}</td>
-            <td>${m.name}</td>
-            <td>${m.level}</td>
-            <td>${m.status}</td>
-            <td>${m.last_action?.relative || ""}</td>
-        </tr>
-    `).join("");
-
-    p.innerHTML = `
-        <div id="sync-toggle" class="card">
-            <div>Faction Sync</div>
-            <div id="sync-btn" class="${this.flags.syncEnabled ? "active":""}"></div>
-        </div>
-
-        <div class="card">
-            <h3 style="color:var(--accent)">Faction Members</h3>
-            <table>
-                <thead>
-                    <tr><th></th><th>Name</th><th>Lvl</th><th>Status</th><th>Last Action</th></tr>
-                </thead>
-                <tbody>${rows}</tbody>
-            </table>
-        </div>
-
-        <div class="card">
-            <h3 style="color:var(--accent2)">Commander Orders</h3>
-            <pre style="
-                white-space:pre-wrap;
-                font-size:12px;
-                font-family:Consolas,monospace;">
-${JSON.stringify(this.data.orders,null,2)}
-            </pre>
-        </div>
-
-        <div class="card">
-            <h3 style="color:var(--accent2)">Shared Targets</h3>
-            <ul style="padding-left:12px;">
-                ${this.data.sharedTargets.map(t=>`<li>${t.name}</li>`).join("")}
-            </ul>
-        </div>
-    `;
-
-    // bind sync toggle
-    const syncBtn = this.shadow.querySelector("#sync-btn");
-    syncBtn.onclick = ()=>{
-        this.flags.syncEnabled = !this.flags.syncEnabled;
-        syncBtn.classList.toggle("active", this.flags.syncEnabled);
-        this.nexus.log("Faction sync " + (this.flags.syncEnabled?"ENABLED":"DISABLED"));
-    };
+Colonel.cmdStrongestEnemy = function(){
+    const arr = Object.values(this.state.enemyMembers);
+    if (!arr.length) return this.respond("No enemies detected.");
+    arr.sort((a,b)=> (b.stats?.total||0) - (a.stats?.total||0));
+    const top = arr[0];
+    this.respond(`Strongest enemy: ${top.name}, level ${top.level}.`);
 };
 
-/* ============================================================================
-   AI TAB
-   ============================================================================
-*/
-Major.renderAITab = function(){
-    const p = this.shadow.querySelector("#panel-ai");
-    if (!p) return;
-
-    const history = this.data.aiMessages.map(msg=>`
-        <div class="${msg.from === "user" ? "ai-user" : "ai-colonel"}">
-            ${escapeHTML(msg.text)}
-        </div>
-    `).join("");
-
-    p.innerHTML = `
-        <div id="ai-console">
-            <div id="ai-log">${history}</div>
-            <input id="ai-input" placeholder="Ask the Colonel..." />
-        </div>
-    `;
-
-    const logBox = this.shadow.querySelector("#ai-log");
-    logBox.scrollTop = logBox.scrollHeight;
+Colonel.cmdThreat = function(){
+    this.respond(`Current threat: ${this.ai.threat} (instability ${(this.ai.instability*100).toFixed(0)}%).`);
 };
 
-/* ============================================================================
-   SEND AI MESSAGE
-   ============================================================================
-*/
-Major.sendAI = function(){
-    const input = this.shadow.querySelector("#ai-input");
-    if (!input) return;
-
-    const msg = input.value.trim();
-    if (!msg) return;
-    input.value = "";
-
-    this.data.aiMessages.push({ from:"user", text:msg });
-    this.nexus.events.emit("ASK_COLONEL", { question: msg });
-    this.renderAITab();
+Colonel.cmdChainStatus = function(){
+    const c = this.state.chain || {};
+    this.respond(`Chain: ${c.hits||0} hits, timeout ${c.timeout||0}s, modifier x${c.modifier||1}.`);
 };
 
-/* ============================================================================
-   LOGS TAB
-   ============================================================================
-*/
-Major.renderLogsTab = function(){
-    const p = this.shadow.querySelector("#panel-logs");
-    if (!p) return;
-
-    const lines = this.data.logs.map(l=>`
-        <div style="color:${l.level==="error"?"var(--bad)":"var(--accent)"}; font-size:11px;">
-            [${l.ts}] ${escapeHTML(l.msg)}
-        </div>
-    `).join("");
-
-    p.innerHTML = `
-        <div class="card">
-            <h3 style="color:var(--accent)">System Logs</h3>
-            <div style="
-                background:#111;
-                border:1px solid #333;
-                padding:10px;
-                height:300px;
-                overflow-y:auto;
-                font-size:11px;
-                font-family:Consolas,monospace;">
-                ${lines}
-            </div>
-        </div>
-    `;
+Colonel.cmdWarStatus = function(){
+    const w = this.state.war || {};
+    const factions = (w.factions||[]).map(f=>f.name).join(" vs ");
+    this.respond(`War status: ${factions || "No active war."}`);
 };
 
-/* ============================================================================
-   UTILITY: Escape HTML
-   ============================================================================
-*/
-function escapeHTML(x){
-    return String(x).replace(/[<>&]/g, m=>{
-        return {"<":"&lt;",">":"&gt;","&":"&amp;"}[m];
-    });
-}
+Colonel.cmdExpanded = function(){
+    this.respond(this.ai.summary || "No intel yet.");
+};
 
-/* ============================================================================
-   REGISTER
-   ============================================================================
-*/
+Colonel.cmdListTargets = function(){
+    const arr = this.ai.topTargets.slice(0,5);
+    if (!arr.length) return this.respond("No viable targets.");
+    const text = arr.map(t=>`${t.name} (score ${t.score.toFixed(2)})`).join("<br>");
+    this.respond(text);
+};
+
+Colonel.cmdListEnemies = function(){
+    const arr = Object.values(this.state.enemyMembers);
+    if (!arr.length) return this.respond("No enemy data available.");
+    const text = arr.map(t=>`${t.name} (lvl ${t.level})`).join(", ");
+    this.respond(text);
+};
+
+Colonel.cmdPredict = function(){
+    this.respond("Prediction system not implemented yet, but instability is "+(this.ai.instability*100).toFixed(0)+"%.");
+};
+
+Colonel.cmdCompare = function(L){
+    this.respond("Comparison mode is experimental. Use explicit stats for now.");
+};
+
+Colonel.cmdTargetSpecific = function(nameFrag){
+    const L = nameFrag.toLowerCase().trim();
+    const arr = Object.values(this.state.enemyMembers);
+    const match = arr.find(e=>e.name.toLowerCase().includes(L));
+    if (!match) return this.respond("No matching enemy found.");
+    const mem = this.memory.enemy[match.id];
+    const estimate = mem?.totalEstimate || this.estimateBaseline(match);
+    this.respond(`Target ${match.name}: estimated ${estimate.toLocaleString()} total stats.`);
+};
+
+/* ============================================================
+   LOG
+   ============================================================ */
+Colonel.log = function(x){
+    this.nexus.log("[COLONEL] "+x);
+};
+
+/* ============================================================
+   EXPORT
+   ============================================================ */
 window.__NEXUS_OFFICERS = window.__NEXUS_OFFICERS || [];
-window.__NEXUS_OFFICERS.push({
-    name:"Major",
-    module: Major
-});
+window.__NEXUS_OFFICERS.push({ name:"Colonel", module:Colonel });
 
 })();
